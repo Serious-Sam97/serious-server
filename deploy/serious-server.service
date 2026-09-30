@@ -1,0 +1,17 @@
+[Unit]
+Description=serious-server management webapp
+After=network.target docker.service
+
+[Service]
+ExecStart=%h/Development/serious-server/backend/target/release/serious-server
+Environment=SS_BIND=127.0.0.1:8420
+Environment=SS_DATA_DIR=%h/.local/share/serious-server
+Environment=SS_ALLOWED_ROOTS=%h/Development
+# Set this to your public hostname so WebSocket origins are pinned:
+# Environment=SS_PUBLIC_ORIGIN=https://serious.example.com
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

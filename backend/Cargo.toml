@@ -1,0 +1,29 @@
+[package]
+name = "serious-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+argon2 = "0.5.3"
+axum = { version = "0.8.9", features = ["ws"] }
+base32 = "0.5.1"
+bollard = "0.21.0"
+futures-util = "0.3.33"
+mime_guess = "2.0.5"
+portable-pty = "0.9.0"
+rand = "0.10.2"
+rusqlite = { version = "0.37", features = ["bundled"] }
+rust-embed = "8.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sysinfo = "0.38.4"
+thiserror = "2.0.19"
+time = { version = "0.3.54", features = ["formatting"] }
+tokio = { version = "1.53.1", features = ["full"] }
+totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }
+tower = "0.5.3"
+tower-http = { version = "0.7.0", features = ["trace", "set-header"] }
+tower-sessions = "0.15.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

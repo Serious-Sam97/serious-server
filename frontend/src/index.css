@@ -1,0 +1,76 @@
+@import 'tailwindcss';
+@import '@xterm/xterm/css/xterm.css';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* "Control Room" theme: warm black, amber accent, monospace everywhere.
+   The zinc/emerald/amber/red/sky scales are remapped rather than replaced so
+   every existing utility class picks up the theme. */
+@theme {
+  --font-sans: 'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  --color-zinc-50: #f4f1e8;
+  --color-zinc-100: #e8e4d8;
+  --color-zinc-200: #dcd7ca;
+  --color-zinc-300: #cfc9bb;
+  --color-zinc-400: #b0aa9c;
+  --color-zinc-500: #8e887b;
+  --color-zinc-600: #6e695e;
+  --color-zinc-700: #3a362d;
+  --color-zinc-800: #2a2720;
+  --color-zinc-900: #151410;
+  --color-zinc-950: #0e0d0b;
+
+  --color-accent: #f5a524;
+  --color-accent-hi: #ffc05c;
+
+  /* status — always paired with a label or glyph, never colour alone */
+  --color-emerald-300: #a6e39a;
+  --color-emerald-400: #7fd36e;
+  --color-amber-200: #f6dd9a;
+  --color-amber-300: #f3cd6d;
+  --color-amber-400: #f0c24b;
+  --color-red-200: #ffc2ba;
+  --color-red-300: #ff998d;
+  --color-red-400: #ff6b5b;
+  --color-sky-400: #6ec9ff;
+
+  /* chart series (validated for CVD separation on the panel surface) */
+  --color-series-1: #cf7f12;
+  --color-series-2: #2f8fd0;
+
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --radius-xl: 3px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+  font-size: 13px;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

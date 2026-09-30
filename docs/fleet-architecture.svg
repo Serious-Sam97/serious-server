@@ -1,0 +1,280 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1250" viewBox="0 0 1900 1250" font-family="Noto Sans, DejaVu Sans, sans-serif">
+  <defs>
+    <marker id="blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#60a5fa"/></marker>
+    <marker id="violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c084fc"/></marker>
+    <marker id="orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fb923c"/></marker>
+    <marker id="green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4ade80"/></marker>
+    <marker id="grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+    <style>
+      .h1 { font-size:30px; font-weight:700; fill:#f8fafc; }
+      .h2 { font-size:19px; font-weight:700; fill:#f1f5f9; }
+      .h3 { font-size:15px; font-weight:700; fill:#f1f5f9; }
+      .s  { font-size:13px; fill:#cbd5e1; }
+      .xs { font-size:12px; fill:#94a3b8; }
+      .m  { font-family:"Noto Sans Mono", monospace; }
+      .lb { font-size:12.5px; font-weight:600; }
+      .hl { fill:#f1f5f9; }
+      .region { fill:#111a2e; stroke:#334155; stroke-width:2; }
+      .box  { fill:#16213a; stroke:#475569; stroke-width:1.5; }
+      .chip { fill:#1e2b47; stroke:#3b4d70; stroke-width:1; }
+      .new  { fill:#2a1f47; stroke:#a855f7; stroke-width:1.5; }
+      .ss   { fill:#172554; stroke:#3b82f6; stroke-width:2; }
+      .pg   { fill:#1c2a3f; stroke:#38bdf8; stroke-width:1.5; }
+      .dim  { fill:#141b2b; stroke:#334155; stroke-width:1.5; stroke-dasharray:6 4; }
+      .cf   { fill:#2a1a0e; stroke:#f59e0b; stroke-width:2; }
+      .blue   { stroke:#60a5fa; stroke-width:2.5; fill:none; }
+      .violet { stroke:#c084fc; stroke-width:2.5; fill:none; }
+      .orange { stroke:#fb923c; stroke-width:3; fill:none; }
+      .green  { stroke:#4ade80; stroke-width:2.5; fill:none; }
+      .grey   { stroke:#94a3b8; stroke-width:1.8; fill:none; stroke-dasharray:5 4; }
+    </style>
+  </defs>
+
+  <rect width="1900" height="1250" fill="#0b1020"/>
+
+  <text x="40" y="56" class="h1">serious-server fleet — system design (V1)</text>
+  <text x="40" y="84" class="s">Droplets only report and obey. All storage — metrics history and backups — is centralized on the home master.</text>
+
+  <!-- ================= DROPLET ================= -->
+  <rect x="64" y="134" width="600" height="830" rx="16" class="region" opacity="0.45"/>
+  <rect x="52" y="122" width="600" height="830" rx="16" class="region" opacity="0.7"/>
+  <rect x="40" y="110" width="600" height="830" rx="16" class="region"/>
+  <text x="64" y="144" class="h2">DigitalOcean droplet  <tspan fill="#60a5fa">× N</tspan></text>
+  <text x="64" y="166" class="xs">outbound only · no inbound ports · nothing stored long-term</text>
+
+  <rect x="70" y="182" width="540" height="296" rx="12" class="ss"/>
+  <text x="90" y="210" class="h3">serious-server — agent  (Docker, headless)</text>
+  <text x="90" y="230" class="xs m">SS_MODE=agent · network_mode: host · pid: host</text>
+  <rect x="90" y="242" width="500" height="38" rx="7" class="chip"/>
+  <text x="104" y="266" class="s">sampler — <tspan class="hl">lite</tspan> every 5 s · <tspan class="hl">full</tspan> only while you watch</text>
+  <rect x="90" y="286" width="500" height="38" rx="7" class="chip"/>
+  <text x="104" y="310" class="s">docker events stream — push on change, no polling</text>
+  <rect x="90" y="330" width="500" height="38" rx="7" class="new"/>
+  <text x="104" y="354" class="s"><tspan class="hl">API tunnel</tspan> — same axum Router in-process, no listener</text>
+  <rect x="90" y="374" width="500" height="38" rx="7" class="new"/>
+  <text x="104" y="398" class="s"><tspan class="hl">backup scheduler</tspan> — cached policy, runs even if home is offline</text>
+  <rect x="90" y="418" width="500" height="38" rx="7" class="chip"/>
+  <text x="104" y="442" class="s">upload queue — resumable, rate-capped · local allowlist</text>
+
+  <rect x="250" y="504" width="180" height="46" rx="8" class="box"/>
+  <text x="340" y="525" class="s" text-anchor="middle">spool (size-capped)</text>
+  <text x="340" y="542" class="xs" text-anchor="middle">deleted once master confirms</text>
+  <rect x="460" y="504" width="150" height="46" rx="8" class="box"/>
+  <text x="535" y="532" class="s m" text-anchor="middle">docker.sock</text>
+
+  <rect x="70" y="592" width="260" height="138" rx="10" class="pg"/>
+  <text x="88" y="618" class="h3">postgres</text>
+  <text x="160" y="618" class="xs">(your app — unchanged)</text>
+  <text x="88" y="642" class="xs">mode: <tspan class="hl">logical</tspan> | <tspan class="hl">continuous</tspan></text>
+  <text x="88" y="662" class="xs">logical → pg_dump -Fc on schedule</text>
+  <text x="88" y="682" class="xs">continuous → base backup on schedule</text>
+  <text x="88" y="702" class="xs">exec inside container, --max-rate</text>
+  <text x="88" y="720" class="xs">WAL slot capped (disk can't fill)</text>
+
+  <rect x="360" y="592" width="250" height="138" rx="10" class="pg"/>
+  <text x="378" y="618" class="h3">wal-sidecar</text>
+  <text x="472" y="618" class="xs">(continuous only)</text>
+  <text x="378" y="642" class="xs">pg_receivewal · same postgres image</text>
+  <text x="378" y="662" class="xs">network: container:postgres</text>
+  <text x="378" y="682" class="xs">replication over 127.0.0.1</text>
+  <text x="378" y="702" class="xs">~10 MB RSS · managed by agent</text>
+  <text x="378" y="720" class="xs">data-loss window ≤ 5 min</text>
+
+  <rect x="70" y="770" width="260" height="70" rx="10" class="dim"/>
+  <text x="200" y="799" class="s" text-anchor="middle">app containers + git repos</text>
+  <text x="200" y="820" class="xs" text-anchor="middle">compose · logs · git · files via tunnel</text>
+  <rect x="360" y="770" width="250" height="70" rx="10" class="dim"/>
+  <text x="485" y="799" class="s" text-anchor="middle">cloudflared (droplet's CF account)</text>
+  <text x="485" y="820" class="xs" text-anchor="middle">public app traffic only — not the fleet</text>
+  <line x1="330" y1="805" x2="360" y2="805" class="grey"/>
+
+  <line x1="330" y1="661" x2="358" y2="661" class="grey" marker-end="url(#grey)"/>
+  <path d="M430,592 L395,554" class="orange" marker-end="url(#orange)"/>
+  <line x1="340" y1="504" x2="340" y2="481" class="orange" marker-end="url(#orange)"/>
+  <line x1="150" y1="592" x2="150" y2="481" class="orange" marker-end="url(#orange)"/>
+  <text x="142" y="530" class="xs lb" fill="#fdba74" text-anchor="end">base</text>
+  <text x="142" y="546" class="xs lb" fill="#fdba74" text-anchor="end">backup</text>
+  <text x="142" y="562" class="xs lb" fill="#fdba74" text-anchor="end">+ dump</text>
+  <line x1="535" y1="504" x2="535" y2="481" class="grey" marker-end="url(#grey)"/>
+  <line x1="200" y1="770" x2="200" y2="732" class="grey"/>
+
+  <text x="64" y="884" class="xs">Local retention: none. The spool only buffers until the master confirms sha256.</text>
+  <text x="64" y="902" class="xs">Terminal is opt-in per droplet (SS_AGENT_ALLOW=…,terminal).</text>
+
+  <!-- ================= MIDDLE ================= -->
+  <!-- tunnel example -->
+  <rect x="800" y="104" width="370" height="96" rx="10" class="new"/>
+  <text x="818" y="128" class="h3">API tunnel — one request, end to end</text>
+  <text x="818" y="150" class="xs m" fill="#e9d5ff">GET /api/nodes/do-1/git/myapp/status</text>
+  <text x="818" y="170" class="xs">master: your session + per-node perms → strip prefix</text>
+  <text x="818" y="188" class="xs">agent: the same git::status handler as at home</text>
+
+  <rect x="800" y="250" width="370" height="420" rx="16" class="cf"/>
+  <text x="820" y="282" class="h2" fill="#fcd34d">Cloudflare edge</text>
+  <text x="978" y="282" class="s" fill="#fcd34d">— home account</text>
+
+  <rect x="820" y="300" width="330" height="120" rx="10" class="chip"/>
+  <text x="838" y="326" class="h3 m">fleet.serious-sam.dev</text>
+  <text x="838" y="350" class="s">Access: service token only</text>
+  <text x="838" y="370" class="s">+ per-node secret (checked by master)</text>
+  <text x="838" y="390" class="xs">bodies ≤ 100 MB → 16 MB WAL / 32 MB chunks</text>
+  <text x="838" y="408" class="xs m">→ 127.0.0.1:8421</text>
+
+  <rect x="820" y="470" width="330" height="110" rx="10" class="chip"/>
+  <text x="838" y="496" class="h3 m">serious-server.serious-sam.dev</text>
+  <text x="838" y="520" class="s">your login: password + TOTP</text>
+  <text x="838" y="540" class="xs">optional CF Access email policy</text>
+  <text x="838" y="566" class="xs m">→ 127.0.0.1:8420</text>
+
+  <text x="820" y="444" class="xs" fill="#fcd34d">alternative: Tailscale — direct WireGuard,</text>
+  <text x="820" y="460" class="xs" fill="#fcd34d">no body limit · same agent, config-only switch</text>
+
+  <rect x="865" y="712" width="240" height="66" rx="12" fill="#0f2a1c" stroke="#4ade80" stroke-width="2"/>
+  <text x="985" y="741" class="h3" text-anchor="middle">You</text>
+  <text x="985" y="761" class="xs" text-anchor="middle">node picker · manage from home</text>
+  <line x1="985" y1="712" x2="985" y2="584" class="green" marker-end="url(#green)"/>
+
+  <!-- backup policy card -->
+  <rect x="800" y="808" width="370" height="176" rx="10" class="new"/>
+  <text x="818" y="834" class="h3">backup policy — per database</text>
+  <text x="818" y="854" class="xs">set in UI › compose labels › defaults · pushed to agent</text>
+  <text x="818" y="880" class="xs m" fill="#e9d5ff">mode:      logical | continuous</text>
+  <text x="818" y="898" class="xs m" fill="#e9d5ff">schedule:  "0 3 * * *"   # nightly</text>
+  <text x="818" y="916" class="xs m" fill="#e9d5ff">window:    01:00–05:00</text>
+  <text x="818" y="934" class="xs m" fill="#e9d5ff">retention: 7 last · 4 weekly · 6 monthly</text>
+  <text x="818" y="952" class="xs m" fill="#e9d5ff">max_rate:  20MB/s · verify: weekly</text>
+  <text x="818" y="972" class="xs">default: logical nightly 03:00 · suggest continuous &gt; 5 GB</text>
+
+  <!-- droplet ⇄ transport -->
+  <path d="M612,262 C720,262 740,330 816,330" class="blue" marker-end="url(#blue)"/>
+  <text x="676" y="220" class="lb" fill="#93c5fd">WSS · one socket</text>
+  <text x="676" y="236" class="xs" fill="#93c5fd">metrics · events · API replies</text>
+  <path d="M816,352 C730,352 700,354 614,354" class="violet" marker-end="url(#violet)"/>
+  <text x="664" y="378" class="lb" fill="#d8b4fe">commands · API</text>
+  <text x="664" y="394" class="xs" fill="#d8b4fe">requests · policy push</text>
+  <path d="M612,440 C700,440 730,398 816,398" class="orange" marker-start="url(#orange)" marker-end="url(#orange)"/>
+  <text x="664" y="474" class="lb" fill="#fdba74">HTTPS chunked</text>
+  <text x="664" y="490" class="xs" fill="#fdba74">upload + restore</text>
+
+  <!-- ================= HOME MASTER ================= -->
+  <rect x="1210" y="110" width="660" height="830" rx="16" class="region"/>
+  <text x="1234" y="144" class="h2">Home PC — master</text>
+  <text x="1234" y="166" class="xs">all storage lives here</text>
+
+  <rect x="1230" y="220" width="46" height="430" rx="10" class="cf"/>
+  <text x="1259" y="435" class="h3" fill="#fcd34d" text-anchor="middle" transform="rotate(-90 1259 435)">cloudflared (home)</text>
+  <line x1="1150" y1="340" x2="1226" y2="340" class="blue" marker-end="url(#blue)"/>
+  <line x1="1150" y1="398" x2="1226" y2="398" class="orange" marker-start="url(#orange)" marker-end="url(#orange)"/>
+  <line x1="1150" y1="525" x2="1226" y2="525" class="green" marker-end="url(#green)"/>
+
+  <rect x="1300" y="186" width="550" height="440" rx="12" class="ss"/>
+  <text x="1320" y="214" class="h3">serious-server — master  (Docker)</text>
+  <rect x="1320" y="228" width="510" height="40" rx="7" class="chip"/>
+  <text x="1336" y="253" class="s"><tspan class="m hl">:8421</tspan>  fleet listener — /fleet/connect · upload · download</text>
+  <rect x="1320" y="276" width="510" height="40" rx="7" class="chip"/>
+  <text x="1336" y="301" class="s">fleet hub — multiplexed streams · control first · live rings</text>
+  <rect x="1320" y="324" width="510" height="40" rx="7" class="new"/>
+  <text x="1336" y="349" class="s"><tspan class="hl">API tunnel router</tspan> — /api/nodes/{node}/… → perms → stream</text>
+  <rect x="1320" y="372" width="510" height="40" rx="7" class="new"/>
+  <text x="1336" y="397" class="s"><tspan class="hl">backup policies</tspan> — UI › labels › defaults → pushed to agents</text>
+  <rect x="1320" y="420" width="510" height="40" rx="7" class="chip"/>
+  <text x="1336" y="445" class="s">backup catalog (SQLite) · retention · PITR planner</text>
+  <rect x="1320" y="468" width="510" height="40" rx="7" class="chip"/>
+  <text x="1336" y="493" class="s">scheduler — verify runs · retention sweeps</text>
+  <rect x="1320" y="516" width="510" height="40" rx="7" class="chip"/>
+  <text x="1336" y="541" class="s">local node (this PC) · users · TOTP · per-node perms · audit</text>
+  <rect x="1320" y="564" width="510" height="40" rx="7" class="chip"/>
+  <text x="1336" y="589" class="s"><tspan class="m hl">:8420</tspan>  UI + API — same React pages + node picker</text>
+  <line x1="1278" y1="248" x2="1318" y2="248" class="blue" marker-end="url(#blue)"/>
+  <line x1="1278" y1="584" x2="1318" y2="584" class="green" marker-end="url(#green)"/>
+
+  <rect x="1230" y="680" width="200" height="150" rx="10" class="box"/>
+  <text x="1246" y="706" class="h3">serious-clickhouse</text>
+  <text x="1246" y="730" class="xs">node_metrics · 90 d</text>
+  <text x="1246" y="748" class="xs">node_metrics_1m · 2 y</text>
+  <text x="1246" y="766" class="xs">fleet_events</text>
+  <text x="1246" y="790" class="xs">system logs off</text>
+  <text x="1246" y="808" class="xs">memory cap ≤ 512 MB</text>
+
+  <rect x="1450" y="680" width="225" height="150" rx="10" class="box"/>
+  <text x="1466" y="706" class="h3">backup storage</text>
+  <text x="1466" y="730" class="xs m">&lt;node&gt;/&lt;db&gt;/</text>
+  <text x="1466" y="748" class="xs m">  dumps/ logical, nightly</text>
+  <text x="1466" y="766" class="xs m">  base/  continuous</text>
+  <text x="1466" y="784" class="xs m">  wal/   continuous</text>
+  <text x="1466" y="808" class="xs">sha256-verified · fsynced</text>
+
+  <rect x="1695" y="680" width="160" height="150" rx="10" class="pg"/>
+  <text x="1711" y="706" class="h3">verify postgres</text>
+  <text x="1711" y="730" class="xs">throwaway container</text>
+  <text x="1711" y="748" class="xs">restore + replay</text>
+  <text x="1711" y="766" class="xs">pg_amcheck → pass/fail</text>
+  <text x="1711" y="790" class="xs">"prod as of yesterday</text>
+  <text x="1711" y="808" class="xs">14:32" — at home</text>
+
+  <line x1="1330" y1="626" x2="1330" y2="676" class="blue" marker-end="url(#blue)"/>
+  <text x="1338" y="656" class="xs" fill="#93c5fd">batched inserts / 30 s</text>
+  <line x1="1560" y1="626" x2="1560" y2="676" class="orange" marker-end="url(#orange)"/>
+  <line x1="1675" y1="755" x2="1691" y2="755" class="orange" marker-end="url(#orange)"/>
+  <line x1="1775" y1="626" x2="1775" y2="676" class="grey" marker-end="url(#grey)"/>
+  <text x="1783" y="656" class="xs">spawns</text>
+
+  <text x="1234" y="874" class="xs">Live charts come from RAM; ClickHouse is history + queries only.</text>
+  <text x="1234" y="892" class="xs">If ClickHouse is down, rows wait in a bounded buffer.</text>
+
+  <!-- ================= FOOTER ================= -->
+  <line x1="40" y1="1018" x2="1870" y2="1018" stroke="#1e293b" stroke-width="2"/>
+
+  <text x="40" y="1054" class="h3">Legend</text>
+  <line x1="40" y1="1080" x2="90" y2="1080" class="blue" marker-end="url(#blue)"/>
+  <text x="100" y="1085" class="s">metrics · events · API replies</text>
+  <line x1="40" y1="1108" x2="90" y2="1108" class="violet" marker-end="url(#violet)"/>
+  <text x="100" y="1113" class="s">commands · API requests · policy push</text>
+  <line x1="40" y1="1136" x2="90" y2="1136" class="orange" marker-end="url(#orange)"/>
+  <text x="100" y="1141" class="s">backup data (chunked, resumable)</text>
+  <line x1="40" y1="1164" x2="90" y2="1164" class="green" marker-end="url(#green)"/>
+  <text x="100" y="1169" class="s">you</text>
+  <line x1="40" y1="1192" x2="90" y2="1192" class="grey" marker-end="url(#grey)"/>
+  <text x="100" y="1197" class="s">local / docker</text>
+  <rect x="40" y="1210" width="50" height="18" rx="4" class="new"/>
+  <text x="100" y="1224" class="s">new in this revision</text>
+
+  <text x="470" y="1054" class="h3">Budgets &amp; guarantees</text>
+  <g class="s">
+    <text x="470" y="1085">• Agent idle: <tspan class="hl">&lt; 0.5 % CPU · &lt; 15 MB RSS</tspan></text>
+    <text x="470" y="1113">• Metrics: <tspan class="hl">~120 B every 5 s</tspan> per node</text>
+    <text x="470" y="1141">• Tunnel costs nothing until you open a page</text>
+    <text x="470" y="1169">• Backups run on schedule even if home is offline</text>
+    <text x="470" y="1197">• Continuous mode: data-loss window <tspan class="hl">≤ 5 min</tspan>, PITR</text>
+    <text x="470" y="1225">• Restore keeps the old volume → one-click rollback</text>
+  </g>
+
+  <text x="1000" y="1054" class="h3">V1 phases</text>
+  <rect x="1000" y="1068" width="200" height="140" rx="10" class="chip"/>
+  <text x="1016" y="1094" class="h3" fill="#60a5fa">P0</text>
+  <text x="1016" y="1118" class="xs">baseline numbers</text>
+  <text x="1016" y="1136" class="xs">release profile</text>
+  <text x="1016" y="1154" class="xs">lite/full sampler</text>
+  <text x="1016" y="1172" class="xs">headless agent mode</text>
+
+  <rect x="1212" y="1068" width="200" height="140" rx="10" class="chip"/>
+  <text x="1228" y="1094" class="h3" fill="#60a5fa">P1</text>
+  <text x="1228" y="1118" class="xs">fleet link + enrollment</text>
+  <text x="1228" y="1136" class="xs">metrics · ClickHouse</text>
+  <text x="1228" y="1154" class="xs">API tunnel + node picker</text>
+  <text x="1228" y="1172" class="xs">projects · docker · git · files</text>
+
+  <rect x="1424" y="1068" width="200" height="140" rx="10" class="chip"/>
+  <text x="1440" y="1094" class="h3" fill="#fb923c">P2</text>
+  <text x="1440" y="1118" class="xs">chunked transfer layer</text>
+  <text x="1440" y="1136" class="xs">logical backups on cron</text>
+  <text x="1440" y="1154" class="xs">policies + Backups tab</text>
+  <text x="1440" y="1172" class="xs">retention · restore</text>
+
+  <rect x="1636" y="1068" width="234" height="140" rx="10" class="chip"/>
+  <text x="1652" y="1094" class="h3" fill="#fb923c">P3</text>
+  <text x="1652" y="1118" class="xs">continuous mode (WAL sidecar)</text>
+  <text x="1652" y="1136" class="xs">base backups · PITR</text>
+  <text x="1652" y="1154" class="xs">verify at home</text>
+  <text x="1652" y="1172" class="xs">alerts</text>
+</svg>

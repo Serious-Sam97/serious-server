@@ -1,0 +1,65 @@
+# Development with hot reload, fully inside Docker:
+#   backend  — cargo-watch rebuilds & restarts on every src change
+#   frontend — vite dev server with HMR, proxying /api to the backend
+#
+#   docker compose -f docker-compose.dev.yml up
+#
+# Open http://127.0.0.1:5173 (the vite server; API goes through its proxy).
+# First backend start is slow (installs cargo-watch into the cached volume).
+#
+# Dev limitations vs prod: no `docker compose ls` CLI in the backend
+# container (project names fall back to directory names) and no systemctl
+# (service badges empty).
+services:
+  backend:
+    image: rust:1.94-slim-bookworm
+    working_dir: /app/backend
+    # Runs as root: keeps the cargo/target cache volumes writable without
+    # ceremony, and it already holds the docker socket. Dev only — the prod
+    # image runs as uid 1000. Caveat: files saved through the dev UI's file
+    # editor land root-owned on the host.
+    command: sh -c "cargo install cargo-watch --locked 2>/dev/null; cargo watch -x run"
+    environment:
+      CARGO_HOME: /cargo
+      SS_BIND: 0.0.0.0:8420
+      SS_ALLOW_PUBLIC_BIND: "true"
+      SS_COOKIE_SECURE: "false"
+      SS_DATA_DIR: /data
+      SS_ALLOWED_ROOTS: /home/samiraniz/Developer
+      SS_SERVICES: ""
+    ports:
+      - "127.0.0.1:8420:8420"
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend/dist:/app/frontend/dist # rust-embed path; empty is fine in dev
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/samiraniz/Developer:/home/samiraniz/Developer
+      # SSH keys for the git panel. This container runs as root, so they go to
+      # /root/.ssh — ssh only ever reads $HOME/.ssh.
+      - /home/samiraniz/.ssh:/root/.ssh:ro
+      - /home/samiraniz/.ssh:/home/samiraniz/.ssh:ro
+      # Own volume, NOT ./data — the dev container runs as root and would
+      # leave the prod container (uid 1000) unable to open a shared DB.
+      - dev-data:/data
+      - cargo-cache:/cargo
+      - target-cache:/app/backend/target
+
+  frontend:
+    image: node:24-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    environment:
+      VITE_PROXY_TARGET: http://backend:8420
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - node-modules:/app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  dev-data:
+  cargo-cache:
+  target-cache:
+  node-modules:

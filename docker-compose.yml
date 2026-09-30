@@ -1,0 +1,33 @@
+# Production: single container, port published to host loopback only —
+# cloudflared on the host remains the only external path.
+#
+#   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
+#   docker compose logs -f     # first boot prints the setup token here
+services:
+  serious-server:
+    build: .
+    container_name: serious-server
+    restart: unless-stopped
+    user: "1000:1000"
+    group_add:
+      - "${DOCKER_GID:-969}" # host docker group, for the mounted socket
+    ports:
+      - "127.0.0.1:8420:8420"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out, so compose files and host bind mounts in
+      # your projects resolve identically for the host docker daemon.
+      - /home/samiraniz/Developer:/home/samiraniz/Developer
+      # Your SSH keys, read-only, so the git panel can push/pull over
+      # git@github.com. Container uid 1000 == host samiraniz, so key perms match.
+      # Mounted at the container user's HOME (uid 1000 is `sam`, HOME=/home/sam)
+      # — that is the only .ssh path ssh consults. The second mount keeps the
+      # host path valid too, for absolute IdentityFile paths in ~/.ssh/config.
+      - /home/samiraniz/.ssh:/home/sam/.ssh:ro
+      - /home/samiraniz/.ssh:/home/samiraniz/.ssh:ro
+      - ./data:/data
+    environment:
+      SS_ALLOWED_ROOTS: /home/samiraniz/Developer
+      # Public origin behind the Cloudflare Tunnel — pins WebSocket handshakes.
+      SS_PUBLIC_ORIGIN: https://serious-server.serious-sam.dev
+      SS_SERVICES: "" # systemctl is not reachable from inside the container
