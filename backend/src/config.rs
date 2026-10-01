@@ -163,14 +163,19 @@ impl Config {
             .split(':')
             .map(PathBuf::from)
             .collect();
-        let allowed_roots = allowed_roots
+        // A typo in one root must not crash-loop the server (an agent would
+        // vanish from the fleet): skip it loudly, fail only if none is left.
+        let allowed_roots: Vec<PathBuf> = allowed_roots
             .iter()
-            .map(|p| {
-                p.canonicalize()
-                    .map_err(|e| anyhow::anyhow!("allowed root {}: {e}", p.display()))
+            .filter_map(|p| match p.canonicalize() {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::warn!("allowed root {} skipped: {e}", p.display());
+                    None
+                }
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        anyhow::ensure!(!allowed_roots.is_empty(), "no allowed roots configured");
+            .collect();
+        anyhow::ensure!(!allowed_roots.is_empty(), "none of the allowed roots (SS_ALLOWED_ROOTS) exist");
         let backup_dir = env("SS_BACKUP_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| data_dir.join(if mode == Mode::Agent { "spool" } else { "backups" }));

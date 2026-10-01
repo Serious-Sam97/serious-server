@@ -1109,14 +1109,12 @@ pub async fn create_token(
         .db
         .call(move |c| {
             c.execute("DELETE FROM join_tokens WHERE expires_at < ?1", [now])?;
-            let taken: i64 = c.query_row(
-                "SELECT (SELECT COUNT(*) FROM nodes WHERE name = ?1) + (SELECT COUNT(*) FROM join_tokens WHERE name = ?1)",
-                [&name],
-                |r| r.get(0),
-            )?;
+            let taken: i64 = c.query_row("SELECT COUNT(*) FROM nodes WHERE name = ?1", [&name], |r| r.get(0))?;
             if taken > 0 {
                 return Ok(true);
             }
+            // A node that hasn't connected yet: a new token replaces the old one.
+            c.execute("DELETE FROM join_tokens WHERE name = ?1", [&name])?;
             c.execute(
                 "INSERT INTO join_tokens (token_hash, name, env, color, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![token_hash, name, env, color, expires_at],
@@ -1125,7 +1123,7 @@ pub async fn create_token(
         })
         .await?;
     if taken {
-        return Err(AppError::Conflict("a node or pending token already uses that name".into()));
+        return Err(AppError::Conflict("a node with that name is already enrolled (revoke it first)".into()));
     }
     let ip = client_ip(&headers, &peer);
     audit(&state.db, &ip, &user.username, "node.token", &req.name, true);

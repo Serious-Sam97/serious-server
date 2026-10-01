@@ -75,6 +75,11 @@ async fn run_git(dir: &FsPath, args: &[&str], identity: Option<&str>) -> AppResu
 /// Resolve project + git permission + repo check in one step.
 async fn git_project(state: &AppState, user: &CurrentUser, name: &str) -> AppResult<Project> {
     let project = find_project(state, name).await?;
+    if project.external {
+        return Err(crate::error::AppError::BadRequest(
+            "this project's files are outside the allowed roots — git is unavailable".into(),
+        ));
+    }
     user.require(user.project(&project.name).git)?;
     if !FsPath::new(&project.path).join(".git").exists() {
         return Err(AppError::BadRequest("not a git repository".into()));
@@ -95,6 +100,11 @@ pub async fn status(
     Path(name): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
     let project = find_project(&state, &name).await?;
+    if project.external {
+        return Err(crate::error::AppError::BadRequest(
+            "this project's files are outside the allowed roots — git is unavailable".into(),
+        ));
+    }
     user.require(user.project(&project.name).git)?;
     let dir = FsPath::new(&project.path);
     if !dir.join(".git").exists() {

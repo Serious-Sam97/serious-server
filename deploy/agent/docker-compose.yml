@@ -47,7 +47,9 @@ services:
       SS_JOIN_TOKEN: ${SS_JOIN_TOKEN:-}
       SS_CF_ACCESS_CLIENT_ID: ${SS_CF_ACCESS_CLIENT_ID:-}
       SS_CF_ACCESS_CLIENT_SECRET: ${SS_CF_ACCESS_CLIENT_SECRET:-}
-      SS_ALLOWED_ROOTS: ${SS_APPS_DIR:-/opt/apps}
+      # Defaults to the whole SS_APPS_DIR; narrow it (':'-separated) when that
+      # mount is broad, e.g. SS_APPS_DIR=/root with only the app folders here.
+      SS_ALLOWED_ROOTS: ${SS_ALLOWED_ROOTS:-${SS_APPS_DIR:-/opt/apps}}
       SS_SERVICES: "" # systemctl is not reachable from inside the container
       # What the master may do here. Add ",terminal" to allow a shell.
       SS_AGENT_ALLOW: ${SS_AGENT_ALLOW:-system,projects,logs,git,files,backups}

@@ -61,6 +61,11 @@ pub async fn project_action(
     // Resolves through the scanner, so `name` maps to a directory under the
     // allowed roots — arbitrary paths can't be smuggled in.
     let project = crate::api::projects::find_project(&state, &name).await?;
+    if project.external {
+        return Err(crate::error::AppError::BadRequest(
+            "this project's compose files are outside the allowed roots — use the per-container actions".into(),
+        ));
+    }
     user.require(user.project(&project.name).control)?;
 
     let mut cmd = tokio::process::Command::new("docker");

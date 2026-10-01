@@ -96,7 +96,7 @@ export default function ProjectDetail() {
         <h1 className="text-lg font-bold">{name}</h1>
         {project && <StatusBadge status={project.status} />}
         <div className="flex-1" />
-        {project && s?.role === 'admin' && (currentNode() === HOME || nodeAllows(fleetNode, 'terminal')) && (
+        {project && !project.external && s?.role === 'admin' && (currentNode() === HOME || nodeAllows(fleetNode, 'terminal')) && (
           <button
             onClick={() => navigate(nodePath(`/terminal?cwd=${encodeURIComponent(project.path)}`))}
             className={`${btn} flex items-center gap-1.5`}
@@ -111,7 +111,12 @@ export default function ProjectDetail() {
       )}
 
       <div className="mb-4 flex flex-wrap gap-2">
-        {can(s, 'control', name) &&
+        {project?.external && (
+          <span className="text-xs text-zinc-500">
+            files at {project.path} are outside the allowed roots — containers only (no compose, git, files or terminal)
+          </span>
+        )}
+        {can(s, 'control', name) && !project?.external &&
           [
             { action: 'up', label: 'up' },
             { action: 'up_build', label: 'up --build' },
@@ -140,7 +145,7 @@ export default function ProjectDetail() {
           ))}
       </div>
 
-      {project && can(s, 'git', name) && (
+      {project && !project.external && can(s, 'git', name) && (
         <GitPanel
           project={name}
           projectPath={project.path}

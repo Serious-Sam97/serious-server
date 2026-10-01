@@ -33,6 +33,8 @@ pub struct Project {
     pub status: &'static str,
     pub running: usize,
     pub total: usize,
+    /// Compose files outside the allowed roots: containers only.
+    pub external: bool,
 }
 
 /// Directories under the allowed roots that contain a compose file.
@@ -99,73 +101,106 @@ async fn container_counts(docker: &bollard::Docker) -> HashMap<String, (usize, u
     counts
 }
 
-/// Map compose config-file path -> compose project name, via `docker compose ls`.
-async fn compose_ls_names() -> HashMap<PathBuf, String> {
-    let mut map = HashMap::new();
+/// Compose projects docker knows about: (name, config files), via `docker compose ls`.
+async fn compose_ls() -> Vec<(String, Vec<PathBuf>)> {
     let output = tokio::process::Command::new("docker")
         .args(["compose", "ls", "--all", "--format", "json"])
         .output()
         .await;
-    let Ok(output) = output else { return map };
+    let Ok(output) = output else { return Vec::new() };
     let Ok(list) = serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout) else {
-        return map;
+        return Vec::new();
     };
-    for item in list {
-        let (Some(name), Some(files)) = (
-            item.get("Name").and_then(|v| v.as_str()),
-            item.get("ConfigFiles").and_then(|v| v.as_str()),
-        ) else {
-            continue;
-        };
-        for file in files.split(',') {
-            map.insert(PathBuf::from(file.trim()), name.to_string());
-        }
+    list.into_iter()
+        .filter_map(|item| {
+            let name = item.get("Name")?.as_str()?.to_string();
+            let files = item
+                .get("ConfigFiles")?
+                .as_str()?
+                .split(',')
+                .map(|f| PathBuf::from(f.trim()))
+                .filter(|f| !f.as_os_str().is_empty())
+                .collect::<Vec<_>>();
+            (!files.is_empty()).then_some((name, files))
+        })
+        .collect()
+}
+
+fn status_of(running: usize, total: usize) -> &'static str {
+    match (running, total) {
+        (_, 0) => "not-created",
+        (0, _) => "stopped",
+        (r, t) if r == t => "running",
+        _ => "partial",
     }
-    map
 }
 
 /// Unfiltered scan — internal use only; the route handler filters by
 /// the caller's view permission.
+///
+/// A scanned directory is matched to the compose project docker reports for
+/// it — by exact file, else by directory (projects started with other file
+/// names, e.g. `docker-compose.prod.yml` + an override) — and then uses that
+/// project's real config files. Compose projects whose files live outside
+/// the allowed roots are listed as `external`: containers only (no compose,
+/// git, files or terminal — this process can't read their files, and they
+/// stay outside the permission jail).
 pub async fn list_all(state: &AppState) -> AppResult<Vec<Project>> {
     let roots = state.config.allowed_roots.clone();
-    let scanned = tokio::task::spawn_blocking(move || scan_compose_dirs(&roots))
+    let scan_roots = roots.clone();
+    let scanned = tokio::task::spawn_blocking(move || scan_compose_dirs(&scan_roots))
         .await
         .map_err(anyhow::Error::from)?;
-    let (counts, names) = tokio::join!(container_counts(&state.docker), compose_ls_names());
+    let (counts, known) = tokio::join!(container_counts(&state.docker), compose_ls());
+    let dir_of = |files: &[PathBuf]| files.first().and_then(|f| f.parent()).map(Path::to_path_buf);
 
-    let projects = scanned
+    let mut used: Vec<String> = Vec::new();
+    let mut projects: Vec<Project> = scanned
         .into_iter()
         .map(|(dir, files)| {
-            let name = files
-                .iter()
-                .find_map(|f| names.get(f))
-                .cloned()
-                .unwrap_or_else(|| {
+            let exact = known.iter().find(|(_, cf)| files.iter().any(|f| cf.contains(f)));
+            let by_dir = || known.iter().find(|(_, cf)| dir_of(cf).as_deref() == Some(dir.as_path()));
+            let (name, compose_files) = match exact.or_else(by_dir) {
+                Some((name, cf)) => (name.clone(), cf.clone()),
+                None => (
                     dir.file_name()
                         .map(|n| n.to_string_lossy().to_lowercase())
-                        .unwrap_or_else(|| "unknown".into())
-                });
-            let (running, total) = counts.get(&name).copied().unwrap_or((0, 0));
-            let status = match (running, total) {
-                (_, 0) => "not-created",
-                (0, _) => "stopped",
-                (r, t) if r == t => "running",
-                _ => "partial",
+                        .unwrap_or_else(|| "unknown".into()),
+                    files,
+                ),
             };
+            used.push(name.clone());
+            let (running, total) = counts.get(&name).copied().unwrap_or((0, 0));
             Project {
                 name,
                 path: dir.to_string_lossy().into_owned(),
-                compose_files: files
-                    .iter()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .collect(),
-                status,
+                compose_files: compose_files.iter().map(|f| f.to_string_lossy().into_owned()).collect(),
+                status: status_of(running, total),
                 running,
                 total,
+                external: false,
             }
         })
         .collect();
 
+    for (name, files) in &known {
+        if used.contains(name) {
+            continue;
+        }
+        let Some(dir) = dir_of(files) else { continue };
+        let inside = roots.iter().any(|r| dir.starts_with(r));
+        let (running, total) = counts.get(name).copied().unwrap_or((0, 0));
+        projects.push(Project {
+            name: name.clone(),
+            path: dir.to_string_lossy().into_owned(),
+            compose_files: files.iter().map(|f| f.to_string_lossy().into_owned()).collect(),
+            status: status_of(running, total),
+            running,
+            total,
+            external: !inside,
+        });
+    }
+    projects.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(projects)
 }
 
@@ -203,7 +238,7 @@ pub async fn permitted_dirs(
     Ok(list_all(state)
         .await?
         .into_iter()
-        .filter(|p| cap(user.project(&p.name)))
+        .filter(|p| !p.external && cap(user.project(&p.name)))
         .map(|p| PathBuf::from(p.path))
         .collect())
 }

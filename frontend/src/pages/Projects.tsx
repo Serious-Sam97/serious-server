@@ -59,6 +59,11 @@ export default function Projects() {
                   {g}
                 </span>
                 <span className="flex-1 truncate">{p.name}</span>
+                {p.external && (
+                  <span className="text-[10px] uppercase text-zinc-500" title="compose files outside the allowed roots">
+                    ext
+                  </span>
+                )}
                 <span
                   className={`text-xs tabular-nums ${
                     p.status === 'partial' ? 'text-amber-400' : p.status === 'stopped' ? 'text-red-400' : 'text-zinc-500'

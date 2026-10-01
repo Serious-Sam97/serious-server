@@ -130,6 +130,8 @@ export interface Project {
   status: 'running' | 'partial' | 'stopped' | 'not-created'
   running: number
   total: number
+  /** Compose files outside the allowed roots: containers only. */
+  external?: boolean
 }
 
 export interface ContainerInfo {
