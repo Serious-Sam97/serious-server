@@ -72,8 +72,30 @@ async fn run_git(dir: &FsPath, args: &[&str], identity: Option<&str>) -> AppResu
     })
 }
 
+/// The repository a project lives in: its own directory or the nearest
+/// parent with a `.git` (a monorepo holding several compose apps), never
+/// climbing above the allowed root that contains it.
+fn repo_root(project_dir: &FsPath, roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let root = roots.iter().filter(|r| project_dir.starts_with(r)).max_by_key(|r| r.as_os_str().len())?;
+    let mut dir = project_dir;
+    loop {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        if dir == root.as_path() {
+            return None;
+        }
+        dir = dir.parent()?;
+    }
+}
+
 /// Resolve project + git permission + repo check in one step.
-async fn git_project(state: &AppState, user: &CurrentUser, name: &str) -> AppResult<Project> {
+/// Returns the project and the repository root to run git in.
+async fn git_project(
+    state: &AppState,
+    user: &CurrentUser,
+    name: &str,
+) -> AppResult<(Project, std::path::PathBuf)> {
     let project = find_project(state, name).await?;
     if project.external {
         return Err(crate::error::AppError::BadRequest(
@@ -81,10 +103,9 @@ async fn git_project(state: &AppState, user: &CurrentUser, name: &str) -> AppRes
         ));
     }
     user.require(user.project(&project.name).git)?;
-    if !FsPath::new(&project.path).join(".git").exists() {
-        return Err(AppError::BadRequest("not a git repository".into()));
-    }
-    Ok(project)
+    let root = repo_root(FsPath::new(&project.path), &state.config.allowed_roots)
+        .ok_or_else(|| AppError::BadRequest("not a git repository".into()))?;
+    Ok((project, root))
 }
 
 async fn unmerged_files(dir: &FsPath) -> AppResult<Vec<String>> {
@@ -106,10 +127,10 @@ pub async fn status(
         ));
     }
     user.require(user.project(&project.name).git)?;
-    let dir = FsPath::new(&project.path);
-    if !dir.join(".git").exists() {
+    let Some(root) = repo_root(FsPath::new(&project.path), &state.config.allowed_roots) else {
         return Ok(Json(json!({ "is_repo": false })));
-    }
+    };
+    let dir = root.as_path();
 
     let branch = run_git(dir, &["rev-parse", "--abbrev-ref", "HEAD"], None).await?;
     let counts = run_git(
@@ -168,6 +189,9 @@ pub async fn status(
 
     Ok(Json(json!({
         "is_repo": true,
+        // Paths in `files` are relative to this (it differs from the project
+        // directory when the project is one app inside a monorepo).
+        "root": dir.to_string_lossy(),
         "branch": branch.output.trim(),
         "ahead": ahead,
         "behind": behind,
@@ -194,8 +218,8 @@ pub async fn action(
     Path(ActionPath { name, action }): Path<ActionPath>,
 ) -> AppResult<Json<GitOutput>> {
     let ip = client_ip(&headers, &peer);
-    let project = git_project(&state, &user, &name).await?;
-    let dir = FsPath::new(&project.path);
+    let (_project, root) = git_project(&state, &user, &name).await?;
+    let dir = root.as_path();
 
     let stash_msg = format!("serious-server: {}", user.username);
     let (args, identity): (Vec<&str>, Option<&str>) = match action.as_str() {
@@ -262,8 +286,8 @@ pub async fn resolve(
     Json(req): Json<ResolveReq>,
 ) -> AppResult<Json<GitOutput>> {
     let ip = client_ip(&headers, &peer);
-    let project = git_project(&state, &user, &name).await?;
-    let dir = FsPath::new(&project.path);
+    let (_project, root) = git_project(&state, &user, &name).await?;
+    let dir = root.as_path();
     let path = validated_conflict_path(dir, &req.path).await?;
 
     let side_flag = match req.side.as_deref() {
@@ -297,8 +321,8 @@ pub async fn mark_resolved(
     Json(req): Json<ResolveReq>,
 ) -> AppResult<Json<GitOutput>> {
     let ip = client_ip(&headers, &peer);
-    let project = git_project(&state, &user, &name).await?;
-    let dir = FsPath::new(&project.path);
+    let (_project, root) = git_project(&state, &user, &name).await?;
+    let dir = root.as_path();
     let path = validated_conflict_path(dir, &req.path).await?;
 
     let add = run_git(dir, &["add", "--", &path], None).await?;

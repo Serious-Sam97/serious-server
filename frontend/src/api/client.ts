@@ -72,6 +72,8 @@ export interface GitCommit {
 
 export interface GitStatus {
   is_repo: boolean
+  /** Repository root; file paths are relative to it (a monorepo can hold several projects). */
+  root?: string
   branch?: string
   ahead?: number | null
   behind?: number | null

@@ -106,6 +106,11 @@ export default function GitPanel({
         {(s.stash_count ?? 0) > 0 && (
           <span className="text-xs text-zinc-500">{s.stash_count} stashed</span>
         )}
+        {s.root && s.root !== projectPath && (
+          <span className="text-xs text-zinc-500" title="this project is one app inside a larger repository">
+            repo {s.root} · shared with other apps
+          </span>
+        )}
         {s.in_merge && (
           <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-400">
             merge in progress
@@ -189,7 +194,7 @@ export default function GitPanel({
               {canFiles && (
                 <button
                   onClick={() =>
-                    navigate(nodePath(`/files?open=${encodeURIComponent(`${projectPath}/${f.path}`)}`))
+                    navigate(nodePath(`/files?open=${encodeURIComponent(`${s?.root ?? projectPath}/${f.path}`)}`))
                   }
                   className={btn}
                   title="Edit the conflict markers by hand in the file editor"
