@@ -6,8 +6,10 @@ import { api, can } from '../api/client'
 import type { ContainerInfo, Job, Project } from '../api/client'
 import { StatusBadge } from './Projects'
 import LogViewer from '../components/LogViewer'
+import BackupsPanel from '../components/BackupsPanel'
 import GitPanel from '../components/GitPanel'
-import { useSession } from '../components/Layout'
+import { useSession, useCurrentNode } from '../components/Layout'
+import { confirmOnNode, currentNode, HOME, nodeAllows, nodePath } from '../lib/node'
 
 function useJobPolling(jobId: number | null, onDone: () => void) {
   const [job, setJob] = useState<Job | null>(null)
@@ -35,6 +37,7 @@ function useJobPolling(jobId: number | null, onDone: () => void) {
 export default function ProjectDetail() {
   const { name = '' } = useParams()
   const navigate = useNavigate()
+  const fleetNode = useCurrentNode()
   const location = useLocation()
   const session = useSession()
   const s = session.data
@@ -93,9 +96,9 @@ export default function ProjectDetail() {
         <h1 className="text-lg font-bold">{name}</h1>
         {project && <StatusBadge status={project.status} />}
         <div className="flex-1" />
-        {project && s?.role === 'admin' && (
+        {project && s?.role === 'admin' && (currentNode() === HOME || nodeAllows(fleetNode, 'terminal')) && (
           <button
-            onClick={() => navigate(`/terminal?cwd=${encodeURIComponent(project.path)}`)}
+            onClick={() => navigate(nodePath(`/terminal?cwd=${encodeURIComponent(project.path)}`))}
             className={`${btn} flex items-center gap-1.5`}
           >
             <SquareTerminal size={14} /> terminal here
@@ -121,7 +124,7 @@ export default function ProjectDetail() {
               key={action}
               disabled={composeAction.isPending || job?.status === 'running'}
               onClick={() =>
-                (action !== 'down' || confirm(`compose down ${name}?`)) &&
+                confirmOnNode(`compose ${label} ${name}`, action === 'down') &&
                 composeAction.mutate(action)
               }
               className={
@@ -207,7 +210,10 @@ export default function ProjectDetail() {
                       <button
                         key={action}
                         disabled={containerAction.isPending}
-                        onClick={() => containerAction.mutate({ id: c.id, action })}
+                        onClick={() =>
+                          confirmOnNode(`${action} ${c.service || c.name}`) &&
+                          containerAction.mutate({ id: c.id, action })
+                        }
                         className="rounded border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-40"
                       >
                         {action}
@@ -234,6 +240,12 @@ export default function ProjectDetail() {
           </tbody>
         </table>
       </div>
+
+      {s && (
+        <div className="mt-4">
+          <BackupsPanel project={name} session={s} />
+        </div>
+      )}
 
       {logContainer && (
         <div className="mt-4 flex min-h-72 flex-1 flex-col overflow-hidden border border-zinc-800 bg-black/30">

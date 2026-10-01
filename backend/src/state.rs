@@ -37,11 +37,13 @@ pub struct AppState {
     /// One-time token printed to the journal on first boot; consumed by setup.
     pub setup_token: Arc<Mutex<Option<String>>>,
     pub login_guard: Arc<LoginGuard>,
-    /// Latest system stats JSON, updated by the sampler task.
-    pub stats_rx: tokio::sync::watch::Receiver<String>,
-    /// Rolling window of compact samples replayed to new dashboard sockets.
-    pub stats_history: crate::api::system::History,
+    /// Latest system stats + rolling history, fed by the sampler thread.
+    pub sampler: crate::api::system::Sampler,
     /// docker compose job states (up/down/pull output).
     pub jobs: Arc<Mutex<Jobs>>,
     pub terminal_sessions: Arc<AtomicUsize>,
+    /// Master mode only: connected agents and the API tunnel.
+    pub fleet: Option<Arc<crate::fleet::master::Fleet>>,
+    /// Master/standalone: the backup store and catalog.
+    pub backups: Option<Arc<crate::backups::master::Backups>>,
 }

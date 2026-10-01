@@ -1,0 +1,51 @@
+# serious-server as a fleet AGENT on a droplet: headless, managed from the
+# master at home. No ports are published — the agent only dials out (443).
+#
+# 1. On the master: Fleet page → "add a node" → copy the join token.
+# 2. Here, create deploy/agent/.env:
+#      SS_MASTER_URL=https://fleet.serious-sam.dev
+#      SS_JOIN_TOKEN=<token from step 1>          # single use, 15 min
+#      SS_CF_ACCESS_CLIENT_ID=<CF Access service token id>
+#      SS_CF_ACCESS_CLIENT_SECRET=<CF Access service token secret>
+#      SS_APPS_DIR=/opt/apps                       # where your compose projects live
+# 3. The image is built on the home server and shipped (no Rust/Node build
+#    on the droplet). From the home server:
+#      docker save serious-server-serious-server:latest | gzip | \
+#        ssh <user>@<droplet> 'gunzip | docker load'
+# 4. mkdir -p data && sudo chown 1000:1000 data
+#    DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d
+#
+# After the first connection the agent keeps its own credentials in
+# data/node.json; SS_JOIN_TOKEN can be deleted from .env.
+services:
+  serious-agent:
+    image: ${SS_IMAGE:-serious-server-serious-server:latest}
+    container_name: serious-agent
+    restart: unless-stopped
+    user: "1000:1000"
+    group_add:
+      - "${DOCKER_GID:-999}" # host docker group, for the mounted socket
+    # Host network: metrics see the droplet's real interfaces, not the
+    # container's own eth0. Nothing listens — headless mode has no HTTP port.
+    network_mode: host
+    # Host PID namespace: the process list (only sampled while you have the
+    # System page open for this node) shows the droplet's processes.
+    pid: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out, so compose files and bind mounts in your
+      # projects resolve identically for the host docker daemon.
+      - ${SS_APPS_DIR:-/opt/apps}:${SS_APPS_DIR:-/opt/apps}
+      - ./data:/data
+    environment:
+      SS_MODE: agent
+      # SS_AGENT_HEADLESS defaults to true in agent mode.
+      SS_MASTER_URL: ${SS_MASTER_URL:?set SS_MASTER_URL in .env}
+      SS_JOIN_TOKEN: ${SS_JOIN_TOKEN:-}
+      SS_CF_ACCESS_CLIENT_ID: ${SS_CF_ACCESS_CLIENT_ID:-}
+      SS_CF_ACCESS_CLIENT_SECRET: ${SS_CF_ACCESS_CLIENT_SECRET:-}
+      SS_ALLOWED_ROOTS: ${SS_APPS_DIR:-/opt/apps}
+      SS_SERVICES: "" # systemctl is not reachable from inside the container
+      # What the master may do here. Add ",terminal" to allow a shell.
+      SS_AGENT_ALLOW: ${SS_AGENT_ALLOW:-system,projects,logs,git,files,backups}
+      # SS_SAMPLE_SECS: "5" # the agent default

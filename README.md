@@ -22,7 +22,9 @@ Designed to sit behind a Cloudflare Tunnel with its own login + TOTP 2FA.
 - **System** — a monitor page meant to stay open on a spare screen: CPU
   (per-core heatmap, temperature, load), memory + swap, network, disk I/O,
   disk usage, sensors, top processes, services and container health, with
-  5/15/30 min charts. The server keeps 30 min of history and replays it on
+  5/15/30 min charts. Processes and the full sensor list are only sampled
+  while this page is open; otherwise the server reads just the cheap
+  counters (~0.1 % of one core idle). The server keeps 30 min of history and replays it on
   connect, so a reload never starts from empty. Press `f` for focus mode
   (hides navigation); the tab title shows live CPU%. A red STALE banner
   appears if updates stop.
@@ -107,6 +109,18 @@ out of the box.
 | `SS_PUBLIC_ORIGIN` | _(unset)_ | Public origin for WS origin pinning |
 | `SS_SERVICES` | `cloudflared,docker,jellyfin` | systemd units shown on the dashboard |
 | `SS_COOKIE_SECURE` | `true` | Set `false` only for plain-HTTP dev |
+| `SS_MODE` | `standalone` | `standalone`, `master` or `agent` (fleet role) |
+| `SS_AGENT_HEADLESS` | `true` in agent mode | No HTTP listener; the agent is managed from the master |
+| `SS_SAMPLE_SECS` | `2` (`5` for agents) | Metrics sampling period, 1–60 s |
+| `SS_FLEET_BIND` | `127.0.0.1:8421` | Master: where agents connect (loopback; cloudflared publishes it) |
+| `SS_CLICKHOUSE_URL` / `_USER` / `_PASSWORD` / `_DB` | _(unset)_ | Master: fleet metrics history (`http://host:port`) |
+| `SS_MASTER_URL` | _(unset)_ | Agent: the master's fleet URL, e.g. `https://fleet.serious-sam.dev` |
+| `SS_JOIN_TOKEN` | _(unset)_ | Agent: single-use enrollment token (first boot only) |
+| `SS_CF_ACCESS_CLIENT_ID` / `_SECRET` | _(unset)_ | Agent: Cloudflare Access service token |
+| `SS_BACKUP_DIR` | `<data>/backups` (`<data>/spool` on agents) | Backup store on the master / spool on agents |
+| `SS_ALERT_NTFY_URL` | _(unset)_ | Master: ntfy topic URL for alerts |
+| `SS_ALERT_WEBHOOK_URL` | _(unset)_ | Master: webhook receiving alert JSON |
+| `SS_AGENT_ALLOW` | `system,projects,logs,git,files,backups` | Agent: what the master may do here (`terminal` is opt-in) |
 
 ## Docker
 
@@ -123,6 +137,77 @@ uid 1000 with the host docker group added. Differences vs the systemd
 install: service badges are empty (no systemctl inside the container) and
 the browser terminal is a bash shell inside the container (with your
 projects mounted), not a host shell.
+
+## Fleet (master + droplet agents)
+
+The home server runs as the **master** (`SS_MODE=master`, see
+`docker-compose.yml`); each droplet runs a headless **agent**
+(`deploy/agent/docker-compose.yml`). Agents dial out to the master — no
+inbound ports on the droplets — and keep one WebSocket open for metrics,
+docker events, and the API tunnel.
+
+- **Fleet overview** (`/fleet`, the landing page): every node with live
+  CPU/mem/disk/load, 24 h CPU from ClickHouse, recent container events.
+- **Environment selector** in the header: `/n/<node>/…` shows the same
+  Projects / System / Files / Audit pages for that droplet. The status line
+  takes the node's colour, and every state change on a droplet asks for
+  confirmation naming the node and its environment.
+- **Enrollment**: Fleet page → "add a node" gives a single-use join token
+  (15 min). The agent swaps it for its own 256-bit secret on first connect
+  (only a SHA-256 is stored on the master). "revoke" drops the link at once.
+- **What the master may do** on a droplet is decided *on the droplet*:
+  `SS_AGENT_ALLOW` (default `system,projects,logs,git,files,backups`;
+  `terminal` is opt-in).
+- **Permissions**: admins see every node; other users need the node ticked
+  on the Users page, and project permissions then apply by project name.
+
+Cloudflare (home account): route `fleet.serious-sam.dev` →
+`http://localhost:8421` and protect it with a Cloudflare Access policy that
+only accepts a **service token**; agents send it via
+`SS_CF_ACCESS_CLIENT_ID/SECRET`. The droplets' own Cloudflare account is not
+involved.
+
+Idle cost measured on this machine: agent ~0.05 % of one core and ~11 MB RSS
+with the link up; serious-clickhouse ~0.7 %, ~150 MB.
+
+## Database backups
+
+Postgres containers in compose projects are detected automatically (by
+image; `serious.backup=false` opts out, `serious.backup.engine=postgres` opts a
+custom image in). Each gets a **Backups** panel on its project page. All
+backups are stored on the master (`SS_BACKUP_DIR`, default `<data>/backups`);
+a droplet only spools a file until the master confirms a verified copy.
+
+- **Policy per database**, set in the UI: cron schedule (+ UTC offset),
+  optional catch-up window, retention (last N + daily/weekly/monthly), dump
+  rate cap, and automatic verification.
+- **`logical` mode**: `pg_dump -Fc` run inside the database container (same
+  version as the server, credentials from the container's own env, `nice 19`),
+  streamed to disk with a sha256 on the way. "backup now" + download = export.
+- **`continuous` mode** (droplets): `pg_receivewal` streams WAL through a
+  replication slot capped at 10 GB (`max_slot_wal_keep_size`, so an outage
+  can't fill the droplet's disk); finished segments ship as they close, and a
+  segment switch every 5 min when there were writes keeps the data-loss
+  window ≤ 5 min. The schedule takes `pg_basebackup` base backups. A lost slot
+  is detected and a new chain starts with a fresh base backup.
+- **Restore** (admin, type `project/service` to confirm): logical restores
+  take a safety dump first; point-in-time restores stop the database, copy
+  its current data to a `serious-rollback-…` volume, rebuild from the nearest
+  base backup, replay WAL to the chosen moment, and roll back automatically
+  if anything fails.
+- **Verification**: each scheduled backup is restored into a throwaway
+  Postgres (same image, no network) on the master and checked (table count +
+  `pg_amcheck`). The result shows next to the backup.
+- Transfers ride the fleet WebSocket as 512 KiB binary frames with acks —
+  resumable from the last byte the master stored.
+
+## Alerts
+
+The master evaluates once a minute: node offline > 5 min, disk ≥ 90 %,
+backup failed, backup overdue (1 h past its schedule), verification failed,
+broken WAL chain. Active alerts show on the Fleet page; new and resolved
+ones are sent to `SS_ALERT_NTFY_URL` (an ntfy topic) and/or
+`SS_ALERT_WEBHOOK_URL` (JSON).
 
 ## Development
 

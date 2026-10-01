@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { NavLink, Outlet } from 'react-router'
 import { api } from '../api/client'
 import type { Project } from '../api/client'
+import { nodePath } from '../lib/node'
 
 const GLYPH: Record<Project['status'], { g: string; cls: string }> = {
   running: { g: '●', cls: 'text-emerald-400' },
@@ -45,7 +46,7 @@ export default function Projects() {
             return (
               <NavLink
                 key={p.path}
-                to={`/projects/${encodeURIComponent(p.name)}`}
+                to={nodePath(`/projects/${encodeURIComponent(p.name)}`)}
                 className={({ isActive }) =>
                   `flex items-center gap-2.5 border-l-2 px-4 py-2 ${
                     isActive

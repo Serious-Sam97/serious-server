@@ -4,12 +4,12 @@ import { Navigate } from 'react-router'
 import { KeyRound, ShieldX, Trash2, UserPlus } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import type { AdminUser, Permissions, Project, ProjectPerms } from '../api/client'
-import { useSession } from '../components/Layout'
+import { useFleetNodes, useSession } from '../components/Layout'
 
 const CAPS: (keyof ProjectPerms)[] = ['view', 'control', 'logs', 'files', 'git']
 
 function emptyPerms(): Permissions {
-  return { system: false, projects: {} }
+  return { system: false, projects: {}, nodes: [] }
 }
 
 function randomPassword(): string {
@@ -31,7 +31,10 @@ function MatrixEditor({
   const [perms, setPerms] = useState<Permissions>({
     system: user.permissions.system,
     projects: { ...user.permissions.projects },
+    nodes: [...(user.permissions.nodes ?? [])],
   })
+  const fleet = useFleetNodes()
+  const remoteNodes = (fleet.data ?? []).filter((n) => !n.local)
   const [error, setError] = useState('')
 
   const save = useMutation({
@@ -73,6 +76,35 @@ function MatrixEditor({
         />
         System monitor (CPU/RAM/disks/services)
       </label>
+      {remoteNodes.length > 0 && (
+        <div className="mb-3 text-sm">
+          <div className="mb-1 text-xs uppercase tracking-wide text-zinc-500">Fleet nodes</div>
+          <div className="flex flex-wrap gap-4">
+            {remoteNodes.map((n) => (
+              <label key={n.name} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={perms.nodes?.includes(n.name) ?? false}
+                  onChange={() =>
+                    setPerms((p) => {
+                      const has = p.nodes?.includes(n.name)
+                      const nodes = has
+                        ? (p.nodes ?? []).filter((x) => x !== n.name)
+                        : [...(p.nodes ?? []), n.name]
+                      return { ...p, nodes }
+                    })
+                  }
+                />
+                <span className="font-mono text-xs">{n.name}</span>
+                <span className="text-[10px] uppercase text-zinc-500">{n.env}</span>
+              </label>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-zinc-500">
+            On a node, the project permissions below apply by project name.
+          </p>
+        </div>
+      )}
       <table className="w-full text-sm">
         <thead className="text-left text-xs uppercase tracking-wide text-zinc-500">
           <tr>

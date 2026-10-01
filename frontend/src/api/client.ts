@@ -1,3 +1,5 @@
+import { apiPath } from '../lib/node'
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -16,7 +18,7 @@ export async function api<T = unknown>(
     headers['X-CSRF'] = '1'
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
   }
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`/api${apiPath(path)}`, {
     method,
     credentials: 'same-origin',
     headers,
@@ -42,7 +44,7 @@ export async function api<T = unknown>(
 
 export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${location.host}/api${path}`
+  return `${proto}://${location.host}/api${apiPath(path)}`
 }
 
 // ---- shared types ----
@@ -87,6 +89,8 @@ export interface GitOutput {
 export interface Permissions {
   system: boolean
   projects: Record<string, ProjectPerms>
+  /** Fleet nodes this user may open (the home server needs no entry). */
+  nodes?: string[]
 }
 
 export interface SessionInfo {

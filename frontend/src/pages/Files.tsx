@@ -9,6 +9,7 @@ import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { Folder, FileText as FileIcon, Link2 } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import type { FileEntry } from '../api/client'
+import { onNodeLabel } from '../lib/node'
 
 function langFor(name: string) {
   if (/\.ya?ml$/.test(name)) return [yaml()]
@@ -240,7 +241,7 @@ export default function Files() {
       {confirming && file && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="w-96 rounded-xl border border-zinc-700 bg-zinc-900 p-5">
-            <h2 className="font-semibold">Save changes?</h2>
+            <h2 className="font-semibold">Save changes{onNodeLabel()}?</h2>
             <p className="mt-2 break-all font-mono text-sm text-zinc-400">{file.path}</p>
             <p className="mt-2 text-sm text-zinc-400">
               This overwrites the file on the server immediately.

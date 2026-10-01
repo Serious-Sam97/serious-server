@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { api, ApiError } from '../api/client'
 import type { GitOutput, GitStatus } from '../api/client'
+import { nodePath, onNodeLabel } from '../lib/node'
 
 export default function GitPanel({
   project,
@@ -151,7 +152,7 @@ export default function GitPanel({
           <button
             disabled={busy}
             onClick={() =>
-              confirm('Abort the merge and return to the pre-pull state?') &&
+              confirm(`Abort the merge${onNodeLabel()} and return to the pre-pull state?`) &&
               act.mutate('merge_abort')
             }
             className={`${btn} border-red-900 text-red-300`}
@@ -188,7 +189,7 @@ export default function GitPanel({
               {canFiles && (
                 <button
                   onClick={() =>
-                    navigate(`/files?open=${encodeURIComponent(`${projectPath}/${f.path}`)}`)
+                    navigate(nodePath(`/files?open=${encodeURIComponent(`${projectPath}/${f.path}`)}`))
                   }
                   className={btn}
                   title="Edit the conflict markers by hand in the file editor"

@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router'
 import { anyProject, api, can } from '../api/client'
 import type { Project, SessionInfo } from '../api/client'
 import { navFor } from './Layout'
+import { HOME, nodePath, onNodeLabel } from '../lib/node'
+import type { FleetNode } from '../lib/node'
 
 interface Command {
   id: string
@@ -16,10 +18,14 @@ const COMPOSE_ACTIONS = ['up', 'restart', 'pull', 'up_build', 'down'] as const
 
 export default function CommandPalette({
   session,
+  nodes,
+  current,
   onClose,
   onLogout,
 }: {
   session: SessionInfo
+  nodes: FleetNode[]
+  current: string
   onClose: () => void
   onLogout: () => void
 }) {
@@ -39,14 +45,25 @@ export default function CommandPalette({
       navigate(to, { state })
       onClose()
     }
-    const out: Command[] = navFor(session).map((n, i) => ({
+    const node = nodes.find((n) => n.name === current)
+    const env = node && !node.local ? node.env : undefined
+    const out: Command[] = navFor(session, current === HOME ? undefined : node).map((n, i) => ({
       id: `nav:${n.to}`,
       label: `go ${n.label}`,
       hint: String(i + 1),
-      run: go(n.to),
+      run: go(n.global ? n.to : nodePath(n.to)),
     }))
+    for (const n of nodes) {
+      if (n.name === current) continue
+      out.push({
+        id: `node:${n.name}`,
+        label: `node ${n.name}`,
+        hint: n.local ? 'master' : `${n.env}${n.online ? '' : ' · offline'}`,
+        run: go(nodePath('/system', n.name)),
+      })
+    }
     for (const p of projects.data ?? []) {
-      const path = `/projects/${encodeURIComponent(p.name)}`
+      const path = nodePath(`/projects/${encodeURIComponent(p.name)}`)
       out.push({ id: `open:${p.name}`, label: `open ${p.name}`, hint: `${p.running}/${p.total}`, run: go(path) })
       if (can(session, 'control', p.name)) {
         for (const a of COMPOSE_ACTIONS) {
@@ -55,24 +72,24 @@ export default function CommandPalette({
             label: `${a.replace('_', ' --')} ${p.name}`,
             hint: 'compose',
             run: () => {
-              if (a === 'down' && !confirm(`compose down ${p.name}?`)) return
+              if ((a === 'down' || current !== HOME) && !confirm(`compose ${a.replace('_', ' --')} ${p.name}${onNodeLabel(current, env)}?`)) return
               go(path, { run: a })()
             },
           })
         }
       }
-      if (session.role === 'admin') {
+      if (session.role === 'admin' && (current === HOME || node?.allow?.includes('terminal'))) {
         out.push({
           id: `term:${p.name}`,
           label: `term ${p.name}`,
           hint: 'shell',
-          run: go(`/terminal?cwd=${encodeURIComponent(p.path)}`),
+          run: go(nodePath(`/terminal?cwd=${encodeURIComponent(p.path)}`)),
         })
       }
     }
     out.push({ id: 'logout', label: 'logout', hint: '', run: onLogout })
     return out
-  }, [session, projects.data, navigate, onClose, onLogout])
+  }, [session, projects.data, navigate, onClose, onLogout, nodes, current])
 
   const filtered = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)

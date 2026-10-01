@@ -6,9 +6,10 @@ import type { Project, ServiceStatus } from '../api/client'
 import TimeChart from '../components/TimeChart'
 import { useSession } from '../components/Layout'
 import type { ChromeContext } from '../components/Layout'
-import { useStats } from '../lib/stats'
+import { useFullStats, useStats } from '../lib/stats'
 import { fmtBytes, fmtRate, fmtUptime, level, levelText } from '../lib/format'
 import type { Level } from '../lib/format'
+import { nodePath } from '../lib/node'
 
 const WINDOWS = [
   { key: '5m', points: 150 },
@@ -77,6 +78,7 @@ function Bar({ frac, lvl = 'ok' }: { frac: number; lvl?: Level }) {
 
 export default function Dashboard() {
   const { stats, history, connected, stale } = useStats()
+  useFullStats()
   const { chromeHidden, setChromeHidden } = useOutletContext<ChromeContext>()
   const session = useSession()
   const [win, setWin] = useState<WindowKey>(loadWindow)
@@ -349,7 +351,7 @@ export default function Dashboard() {
               </tbody>
             </table>
           ) : (
-            <span className="text-zinc-500">not reported by this server version</span>
+            <span className="text-zinc-500">sampling…</span>
           )}
         </Panel>
 
@@ -394,7 +396,7 @@ export default function Dashboard() {
             <Panel
               title="CONTAINERS"
               right={
-                <Link to="/projects" className="text-accent hover:text-accent-hi">
+                <Link to={nodePath('/projects')} className="text-accent hover:text-accent-hi">
                   open →
                 </Link>
               }
@@ -409,7 +411,7 @@ export default function Dashboard() {
                     {attention.map((p) => (
                       <Link
                         key={p.name}
-                        to={`/projects/${encodeURIComponent(p.name)}`}
+                        to={nodePath(`/projects/${encodeURIComponent(p.name)}`)}
                         className={p.status === 'stopped' ? 'text-red-400' : 'text-amber-400'}
                       >
                         {p.status === 'stopped' ? '○' : '◐'} {p.name} {p.running}/{p.total}

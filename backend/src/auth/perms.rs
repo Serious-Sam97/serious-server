@@ -11,6 +11,9 @@ use crate::error::AppError;
 pub struct Permissions {
     pub system: bool,
     pub projects: HashMap<String, ProjectPerms>,
+    /// Fleet nodes (droplets) this user may open. Project permissions then
+    /// apply by project name on that node too. The home server needs no entry.
+    pub nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -86,6 +89,11 @@ impl CurrentUser {
             return ProjectPerms::ALL;
         }
         self.perms.projects.get(name).copied().unwrap_or_default()
+    }
+
+    /// May this user open a remote fleet node at all?
+    pub fn can_node(&self, node: &str) -> bool {
+        self.is_admin() || self.perms.nodes.iter().any(|n| n == node)
     }
 
     pub fn require(&self, allowed: bool) -> Result<(), AppError> {

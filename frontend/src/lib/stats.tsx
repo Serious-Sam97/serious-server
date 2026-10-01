@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { wsUrl } from '../api/client'
 import type { HistoryPoint, SystemStats } from '../api/client'
 
@@ -16,6 +16,8 @@ export interface StatsState {
 
 const EMPTY: StatsState = { stats: null, history: [], connected: false, stale: false }
 const StatsContext = createContext<StatsState>(EMPTY)
+/** Registers a need for full samples; returns the release function. */
+const FullContext = createContext<() => () => void>(() => () => {})
 
 function pointFrom(s: SystemStats): HistoryPoint {
   return [
@@ -40,6 +42,22 @@ export function StatsProvider({
   children: React.ReactNode
 }) {
   const [state, setState] = useState<StatsState>(EMPTY)
+  // Processes and the full sensor list are expensive to sample, so the
+  // server only collects them while some page asks (see useFullStats).
+  const fullCount = useRef(0)
+  const wsRef = useRef<WebSocket | null>(null)
+
+  const sendFull = useCallback((full: boolean) => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ full }))
+  }, [])
+
+  const requestFull = useCallback(() => {
+    if (++fullCount.current === 1) sendFull(true)
+    return () => {
+      if (--fullCount.current === 0) sendFull(false)
+    }
+  }, [sendFull])
 
   useEffect(() => {
     if (!enabled) return
@@ -50,7 +68,11 @@ export function StatsProvider({
 
     function connect() {
       ws = new WebSocket(wsUrl('/ws/system'))
-      ws.onopen = () => setState((s) => ({ ...s, connected: true }))
+      wsRef.current = ws
+      ws.onopen = () => {
+        setState((s) => ({ ...s, connected: true }))
+        if (fullCount.current > 0) sendFull(true)
+      }
       ws.onmessage = (ev) => {
         let msg: unknown
         try {
@@ -92,11 +114,23 @@ export function StatsProvider({
       closed = true
       clearTimeout(retry)
       clearInterval(watchdog)
+      wsRef.current = null
       ws?.close()
     }
-  }, [enabled])
+  }, [enabled, sendFull])
 
-  return <StatsContext.Provider value={state}>{children}</StatsContext.Provider>
+  return (
+    <FullContext.Provider value={requestFull}>
+      <StatsContext.Provider value={state}>{children}</StatsContext.Provider>
+    </FullContext.Provider>
+  )
+}
+
+/// Call from a page that shows processes or the full sensor list: the
+/// server samples them only while such a page is mounted.
+export function useFullStats() {
+  const requestFull = useContext(FullContext)
+  useEffect(() => requestFull(), [requestFull])
 }
 
 export function useStats() {

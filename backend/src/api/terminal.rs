@@ -179,6 +179,11 @@ async fn run_terminal(
 }
 
 async fn still_permits_terminal(state: &AppState, username: &str, _cwd: &std::path::Path) -> bool {
+    // On an agent the user lives on the master, which re-checks every
+    // tunneled stream itself and closes it on revocation.
+    if state.config.mode == crate::config::Mode::Agent {
+        return true;
+    }
     match crate::auth::fetch_user(&state.db, username).await {
         Ok(Some(u)) if u.totp_confirmed && !u.must_change_password => {
             u.to_current().is_admin()

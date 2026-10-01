@@ -1,8 +1,12 @@
-# Production: single container, port published to host loopback only —
-# cloudflared on the host remains the only external path.
+# Production on the home server: serious-server as the fleet MASTER plus its
+# dedicated ClickHouse. Everything binds to host loopback — cloudflared on the
+# host is the only external path:
+#   serious-server.serious-sam.dev → 127.0.0.1:8420  (dashboard; your login)
+#   fleet.serious-sam.dev          → 127.0.0.1:8421  (agents; CF Access service token)
 #
+#   echo "SS_CLICKHOUSE_PASSWORD=$(openssl rand -hex 16)" >> .env   # once
 #   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
-#   docker compose logs -f     # first boot prints the setup token here
+#   docker compose logs -f serious-server   # first boot prints the setup token here
 services:
   serious-server:
     build: .
@@ -11,8 +15,13 @@ services:
     user: "1000:1000"
     group_add:
       - "${DOCKER_GID:-969}" # host docker group, for the mounted socket
-    ports:
-      - "127.0.0.1:8420:8420"
+    # Host network + PID namespace: the System page shows this machine's real
+    # interfaces and processes (not just the container's), and both listeners
+    # bind straight to host loopback — no port publishing needed.
+    network_mode: host
+    pid: host
+    depends_on:
+      - serious-clickhouse
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path inside and out, so compose files and host bind mounts in
@@ -27,7 +36,39 @@ services:
       - /home/samiraniz/.ssh:/home/samiraniz/.ssh:ro
       - ./data:/data
     environment:
+      SS_MODE: master
+      SS_BIND: 127.0.0.1:8420
+      SS_FLEET_BIND: 127.0.0.1:8421
       SS_ALLOWED_ROOTS: /home/samiraniz/Developer
       # Public origin behind the Cloudflare Tunnel — pins WebSocket handshakes.
       SS_PUBLIC_ORIGIN: https://serious-server.serious-sam.dev
       SS_SERVICES: "" # systemctl is not reachable from inside the container
+      SS_CLICKHOUSE_URL: http://127.0.0.1:8124
+      SS_CLICKHOUSE_USER: serious
+      SS_CLICKHOUSE_PASSWORD: ${SS_CLICKHOUSE_PASSWORD:?set SS_CLICKHOUSE_PASSWORD in .env}
+      # Alerts (optional, set in .env): an ntfy topic and/or a JSON webhook.
+      SS_ALERT_NTFY_URL: ${SS_ALERT_NTFY_URL:-}
+      SS_ALERT_WEBHOOK_URL: ${SS_ALERT_WEBHOOK_URL:-}
+
+  # Fleet metrics history — master only, never on droplets. Tuned to idle
+  # quietly (see deploy/clickhouse/config.d/serious.xml).
+  serious-clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: serious-clickhouse
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8124:8123" # HTTP only; 8123 is galileo's
+    environment:
+      CLICKHOUSE_DB: serious
+      CLICKHOUSE_USER: serious
+      CLICKHOUSE_PASSWORD: ${SS_CLICKHOUSE_PASSWORD:?set SS_CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 0
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - serious-clickhouse:/var/lib/clickhouse
+      - ./deploy/clickhouse/config.d/serious.xml:/etc/clickhouse-server/config.d/serious.xml:ro
+      - ./deploy/clickhouse/users.d/serious.xml:/etc/clickhouse-server/users.d/serious.xml:ro
+
+volumes:
+  serious-clickhouse:

@@ -235,6 +235,11 @@ async fn stream_logs(
 }
 
 async fn still_permits_logs(state: &AppState, username: &str, project: &str) -> bool {
+    // On an agent the user lives on the master, which re-checks every
+    // tunneled stream itself and closes it on revocation.
+    if state.config.mode == crate::config::Mode::Agent {
+        return true;
+    }
     match crate::auth::fetch_user(&state.db, username).await {
         Ok(Some(u)) if u.totp_confirmed && !u.must_change_password => {
             u.to_current().project(project).logs

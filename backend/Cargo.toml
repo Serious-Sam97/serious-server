@@ -8,8 +8,12 @@ anyhow = "1.0.104"
 argon2 = "0.5.3"
 axum = { version = "0.8.9", features = ["ws"] }
 base32 = "0.5.1"
+base64 = "0.22.1"
 bollard = "0.21.0"
 futures-util = "0.3.33"
+http-body-util = "0.1.4"
+hyper = { version = "1.11.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.20", features = ["tokio", "service"] }
 mime_guess = "2.0.5"
 portable-pty = "0.9.0"
 rand = "0.10.2"
@@ -17,13 +21,28 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 rust-embed = "8.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.10.9"
 sysinfo = "0.38.4"
 thiserror = "2.0.19"
-time = { version = "0.3.54", features = ["formatting"] }
+time = { version = "0.3.54", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
+# Fleet link client. TLS is wired by hand (tokio-rustls + ring) so no
+# aws-lc/cmake toolchain or OpenSSL is needed, and plain ws:// works for tests.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
+webpki-roots = "1"
 totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["trace", "set-header"] }
 tower-sessions = "0.15.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Smaller binary and fewer resident pages. Deliberately NOT panic = "abort":
+# today a panicking request handler only fails that request; with abort it
+# would take the whole server (and every session) down.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
