@@ -22,7 +22,10 @@ services:
     image: ${SS_IMAGE:-serious-server-serious-server:latest}
     container_name: serious-agent
     restart: unless-stopped
-    user: "1000:1000"
+    # Set SS_AGENT_USER=0:0 when your apps live somewhere uid 1000 can't read
+    # (e.g. under /root). The docker socket makes the agent root-equivalent
+    # on the host either way.
+    user: "${SS_AGENT_USER:-1000:1000}"
     group_add:
       - "${DOCKER_GID:-999}" # host docker group, for the mounted socket
     # Host network: metrics see the droplet's real interfaces, not the
