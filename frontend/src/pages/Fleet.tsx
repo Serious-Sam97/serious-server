@@ -5,6 +5,7 @@ import { api, ApiError } from '../api/client'
 import { canSystem, useFleetNodes, useSession } from '../components/Layout'
 import { fmtBytes, fmtRate, fmtUptime, level, levelText } from '../lib/format'
 import { nodeAllows, nodePath } from '../lib/node'
+import TimeChart from '../components/TimeChart'
 import type { FleetNode } from '../lib/node'
 
 const ENV_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7']
@@ -45,6 +46,86 @@ function DayCpu({ node }: { node: string }) {
     <div className="mt-2">
       <div className="text-[10px] uppercase tracking-wide text-zinc-500">cpu · 24 h</div>
       <Spark values={q.data.points.map((p) => p[1])} className="text-zinc-400" />
+    </div>
+  )
+}
+
+/** Last 7 days at a glance: reporting uptime, container churn, backups. */
+function WeekSummary({ node }: { node: string }) {
+  const q = useQuery({
+    queryKey: ['node-summary', node],
+    queryFn: () =>
+      api<{
+        uptime_pct: number | null
+        containers: { container: string; restarts: number; dies: number; ooms: number }[]
+        backups: { ok: number; failed: number }
+      }>(`/fleet/nodes/${encodeURIComponent(node)}/summary?days=7`),
+    refetchInterval: 5 * 60_000,
+    retry: false,
+  })
+  const d = q.data
+  if (!d) return null
+  const restarts = d.containers.reduce((a, c) => a + c.restarts, 0)
+  const dies = d.containers.reduce((a, c) => a + c.dies, 0)
+  const ooms = d.containers.reduce((a, c) => a + c.ooms, 0)
+  const worst = d.containers[0]
+  return (
+    <div className="flex flex-wrap gap-x-3 text-[11px] text-zinc-500" title={worst ? `most: ${worst.container}` : ''}>
+      <span>7 d</span>
+      {d.uptime_pct != null && (
+        <span className={d.uptime_pct < 99 ? 'text-amber-400' : 'text-zinc-300'}>{d.uptime_pct.toFixed(2)}% up</span>
+      )}
+      <span className={dies > 0 ? 'text-amber-400' : ''}>
+        {restarts} restarts · {dies} dies{ooms > 0 && <span className="text-red-400"> · {ooms} OOM</span>}
+      </span>
+      {(d.backups.ok > 0 || d.backups.failed > 0) && (
+        <span className={d.backups.failed > 0 ? 'text-red-400' : ''}>
+          backups {d.backups.ok} ok{d.backups.failed > 0 && ` / ${d.backups.failed} failed`}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** One metric for every node on the same axis. */
+function Compare() {
+  const [metric, setMetric] = useState<'cpu' | 'mem'>('cpu')
+  const [hours, setHours] = useState(24)
+  const q = useQuery({
+    queryKey: ['compare', metric, hours],
+    queryFn: () =>
+      api<{ times: number[]; series: { node: string; color: string | null; values: (number | null)[] }[] }>(
+        `/fleet/compare?hours=${hours}&metric=${metric}`,
+      ),
+    refetchInterval: 60_000,
+    retry: false,
+  })
+  if (!q.data || q.data.series.length < 2) return null
+  const chip = (on: boolean) => `px-2 py-0.5 ${on ? 'bg-accent text-zinc-950' : 'hover:bg-zinc-800'}`
+  return (
+    <div className="border border-zinc-800 bg-zinc-950 p-3">
+      <div className="mb-2 flex items-center gap-3 text-xs">
+        <span className="font-bold text-zinc-100">compare</span>
+        <div className="flex border border-zinc-700">
+          <button type="button" className={chip(metric === 'cpu')} onClick={() => setMetric('cpu')}>cpu %</button>
+          <button type="button" className={chip(metric === 'mem')} onClick={() => setMetric('mem')}>mem %</button>
+        </div>
+        <div className="flex border border-zinc-700">
+          <button type="button" className={chip(hours === 24)} onClick={() => setHours(24)}>24h</button>
+          <button type="button" className={chip(hours === 168)} onClick={() => setHours(168)}>7d</button>
+        </div>
+      </div>
+      <TimeChart
+        series={q.data.series.map((s) => ({
+          label: s.node,
+          values: s.values,
+          color: s.color ?? 'var(--color-accent)',
+        }))}
+        times={q.data.times}
+        max={100}
+        format={(v) => `${v.toFixed(1)}%`}
+        height={150}
+      />
     </div>
   )
 }
@@ -112,6 +193,7 @@ function NodeCard({ n, admin, onRevoke }: { n: FleetNode; admin: boolean; onRevo
       </div>
 
       <div className="mt-auto space-y-1 px-3 py-2 text-xs text-zinc-500">
+        <WeekSummary node={n.name} />
         {n.online && last && s && (
           <div className="tabular-nums">
             {fmtBytes(last[2])}/{fmtBytes(s.mem_total)} · ↓{fmtRate(last[3])} ↑{fmtRate(last[4])} · up{' '}
@@ -294,6 +376,7 @@ export default function Fleet() {
         </span>
       </div>
       <Alerts />
+      <Compare />
       {nodes.isLoading && <div className="text-zinc-500">loading…</div>}
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
         {list.map((n) => (

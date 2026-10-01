@@ -9,14 +9,102 @@ import type { ChromeContext } from '../components/Layout'
 import { useFullStats, useStats } from '../lib/stats'
 import { fmtBytes, fmtRate, fmtUptime, level, levelText } from '../lib/format'
 import type { Level } from '../lib/format'
-import { nodePath } from '../lib/node'
+import { currentNode, nodePath } from '../lib/node'
+import { toMarkers } from '../lib/events'
+import type { FleetEvent } from '../lib/events'
 
+/** Live windows replay the in-memory 2 s samples; history windows come from
+ *  ClickHouse (1-minute rollups: average + peak). */
 const WINDOWS = [
-  { key: '5m', points: 150 },
-  { key: '15m', points: 450 },
-  { key: '30m', points: 900 },
+  { key: '5m', points: 150, hours: 0 },
+  { key: '15m', points: 450, hours: 0 },
+  { key: '30m', points: 900, hours: 0 },
+  { key: '6h', points: 0, hours: 6 },
+  { key: '24h', points: 0, hours: 24 },
+  { key: '7d', points: 0, hours: 168 },
+  { key: '30d', points: 0, hours: 720 },
 ] as const
 type WindowKey = (typeof WINDOWS)[number]['key']
+const S3 = '#f87171'
+
+/** `[x, cpu_avg, cpu_max, mem_avg, mem_max, rx_avg, tx_avg, load_avg, disk_r_avg, disk_w_avg,
+ *   disk_used, disk_total, swap_used, swap_total, mem_total, rx_max, tx_max]` */
+type HistoryRow = number[]
+
+/** Inline sparkline scaled to its own peak (title shows the peak). */
+function MiniSpark({ values }: { values: number[] }) {
+  if (values.length < 2) return <span className="text-zinc-600">collecting…</span>
+  const peak = Math.max(...values, 0.1)
+  const pts = values.map((v, i) => `${(i / (values.length - 1)) * 100},${18 - (v / peak) * 16 - 1}`).join(' ')
+  return (
+    <svg viewBox="0 0 100 18" preserveAspectRatio="none" className="h-4 w-full text-accent" aria-label={`peak ${peak.toFixed(1)}%`}>
+      <title>{`peak ${peak.toFixed(1)}% cpu`}</title>
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
+function ContainersPanel({ node }: { node: string }) {
+  const q = useQuery({
+    queryKey: ['containers', node],
+    queryFn: () =>
+      api<{
+        ts: number | null
+        containers: {
+          project: string
+          service: string
+          container: string
+          latest: { cpu: number; mem: number; mem_limit: number; rx: number; tx: number } | null
+          series: [number, number, number][]
+        }[]
+      }>(`/fleet/nodes/${encodeURIComponent(node)}/containers?hours=24`),
+    refetchInterval: 60_000,
+    retry: false,
+  })
+  if (!q.data || q.data.containers.length === 0) return null
+  const rows = [...q.data.containers].sort((a, b) => (b.latest?.mem ?? 0) - (a.latest?.mem ?? 0))
+  return (
+    <Panel
+      title={`CONTAINERS · ${rows.length}`}
+      right={<span className="text-zinc-400">last minute · cpu avg, mem · 24 h trend</span>}
+    >
+      <table className="w-full text-xs">
+        <thead className="text-left text-[10px] uppercase tracking-wide text-zinc-500">
+          <tr>
+            <th className="py-1 pr-2 font-normal">container</th>
+            <th className="px-2 py-1 text-right font-normal">cpu</th>
+            <th className="px-2 py-1 text-right font-normal">mem</th>
+            <th className="px-2 py-1 text-right font-normal">24 h peak</th>
+            <th className="w-40 py-1 pl-2 font-normal">cpu · 24 h</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-800/60">
+          {rows.map((c) => {
+            const peak = Math.max(0, ...c.series.map((p) => p[2]))
+            const memPct = c.latest && c.latest.mem_limit > 0 ? (c.latest.mem / c.latest.mem_limit) * 100 : 0
+            return (
+              <tr key={c.container} className={c.latest ? 'text-zinc-200' : 'text-zinc-600'}>
+                <td className="max-w-56 truncate py-1 pr-2" title={`${c.project}/${c.service}`}>
+                  {c.container}
+                </td>
+                <td className={`px-2 py-1 text-right tabular-nums ${levelText[level(c.latest?.cpu ?? 0, 75, 95)]}`}>
+                  {c.latest ? `${c.latest.cpu.toFixed(1)}%` : '–'}
+                </td>
+                <td className={`px-2 py-1 text-right tabular-nums ${levelText[level(memPct, 80, 92)]}`}>
+                  {c.latest ? fmtBytes(c.latest.mem) : 'stopped'}
+                </td>
+                <td className="px-2 py-1 text-right tabular-nums text-zinc-400">{peak ? fmtBytes(peak) : '–'}</td>
+                <td className="py-1 pl-2">
+                  <MiniSpark values={c.series.map((p) => p[1])} />
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </Panel>
+  )
+}
 
 const S1 = 'var(--color-series-1)'
 const S2 = 'var(--color-series-2)'
@@ -24,7 +112,8 @@ const S2 = 'var(--color-series-2)'
 function loadWindow(): WindowKey {
   try {
     const v = localStorage.getItem('ss.system.window')
-    if (v === '5m' || v === '15m' || v === '30m') return v
+    const found = WINDOWS.find((w) => w.key === v)
+    if (found) return found.key
   } catch {
     /* storage unavailable */
   }
@@ -88,6 +177,25 @@ export default function Dashboard() {
     queryFn: () => api<ServiceStatus[]>('/system/services'),
     refetchInterval: 10_000,
   })
+  const node = currentNode()
+  const winDef = WINDOWS.find((w) => w.key === win)!
+  const longWin = winDef.hours > 0
+  const hist = useQuery({
+    queryKey: ['history', node, winDef.hours],
+    queryFn: () =>
+      api<{ points: HistoryRow[] }>(`/fleet/nodes/${encodeURIComponent(node)}/history?hours=${winDef.hours}`),
+    enabled: longWin,
+    refetchInterval: 60_000,
+    retry: false,
+  })
+  const eventsQ = useQuery({
+    queryKey: ['events', node, Math.max(winDef.hours, 1)],
+    queryFn: () =>
+      api<FleetEvent[]>(`/fleet/events?node=${encodeURIComponent(node)}&hours=${Math.max(winDef.hours, 1)}`),
+    refetchInterval: 60_000,
+    retry: false,
+  })
+  const markers = toMarkers(eventsQ.data ?? [])
   const showProjects = anyProject(session.data, 'view')
   const projects = useQuery({
     queryKey: ['projects'],
@@ -138,10 +246,20 @@ export default function Dashboard() {
     )
   }
 
-  const n = WINDOWS.find((w) => w.key === win)!.points
-  const h = history.slice(-n)
+  const h = longWin ? (hist.data?.points ?? []) : history.slice(-winDef.points)
   const times = h.map((p) => p[0])
   const col = (i: number) => h.map((p) => p[i])
+  // History rows and live points share columns 0 (time) and 1 (cpu); the rest differ.
+  const cpuPeak = longWin ? [{ label: 'peak', values: col(2), color: S3, dashed: true }] : []
+  const memAvg = longWin ? col(3) : col(2)
+  const memPeak = longWin ? [{ label: 'peak', values: col(4), color: S3, dashed: true }] : []
+  const rxCol = longWin ? col(5) : col(3)
+  const txCol = longWin ? col(6) : col(4)
+  const drCol = longWin ? col(8) : col(5)
+  const dwCol = longWin ? col(9) : col(6)
+  const pct = (a: number, b: number) => (b > 0 ? (a / b) * 100 : null)
+  const diskPct = longWin ? h.map((p) => pct(p[10], p[11])) : []
+  const swapPct = longWin ? h.map((p) => pct(p[12], p[13])) : []
 
   const host = stats.host
   const cores = stats.cpu.per_core.length
@@ -179,7 +297,11 @@ export default function Dashboard() {
         <span
           className={`flex items-center gap-1.5 ${stale || !connected ? 'text-red-400' : 'text-emerald-400'}`}
         >
-          {stale || !connected ? '○ STALE — reconnecting' : '● LIVE 2s'}
+          {longWin
+            ? `◷ history · ${win} · avg + peak`
+            : stale || !connected
+              ? '○ STALE — reconnecting'
+              : '● LIVE 2s'}
         </span>
         <div className="flex border border-zinc-700" role="group" aria-label="Chart window">
           {WINDOWS.map((w) => (
@@ -234,10 +356,11 @@ export default function Dashboard() {
             )}
           </div>
           <TimeChart
-            series={[{ label: 'cpu', values: col(1), color: S1, area: true }]}
+            series={[{ label: 'cpu', values: col(1), color: S1, area: true }, ...cpuPeak]}
             times={times}
             max={100}
             format={(v) => `${v.toFixed(0)}%`}
+            markers={markers}
           />
         </Panel>
 
@@ -259,10 +382,11 @@ export default function Dashboard() {
             )}
           </div>
           <TimeChart
-            series={[{ label: 'used', values: col(2), color: S1, area: true }]}
+            series={[{ label: 'used', values: memAvg, color: S1, area: true }, ...memPeak]}
             times={times}
             max={stats.mem.total}
             format={(v) => fmtBytes(v)}
+            markers={markers}
           />
         </Panel>
 
@@ -276,11 +400,12 @@ export default function Dashboard() {
           </div>
           <TimeChart
             series={[
-              { label: 'rx ↓', values: col(3), color: S1 },
-              { label: 'tx ↑', values: col(4), color: S2 },
+              { label: 'rx ↓', values: rxCol, color: S1 },
+              { label: 'tx ↑', values: txCol, color: S2 },
             ]}
             times={times}
             format={fmtRate}
+            markers={markers}
           />
         </Panel>
 
@@ -291,14 +416,38 @@ export default function Dashboard() {
           </div>
           <TimeChart
             series={[
-              { label: 'read', values: col(5), color: S1 },
-              { label: 'write', values: col(6), color: S2 },
+              { label: 'read', values: drCol, color: S1 },
+              { label: 'write', values: dwCol, color: S2 },
             ]}
             times={times}
             format={fmtRate}
+            markers={markers}
           />
         </Panel>
       </div>
+
+      {longWin && hist.isError && (
+        <div className="border border-zinc-800 px-3 py-2 text-xs text-zinc-400">
+          History windows need ClickHouse on the master (SS_CLICKHOUSE_URL).
+        </div>
+      )}
+      {longWin && h.length > 0 && (
+        <Panel title="DISK SPACE · SWAP" right={<span className="text-zinc-400">% used (peak per bucket)</span>}>
+          <TimeChart
+            series={[
+              { label: 'disk /', values: diskPct, color: S1, area: true },
+              { label: 'swap', values: swapPct, color: S2 },
+            ]}
+            times={times}
+            max={100}
+            format={(v) => `${v.toFixed(1)}%`}
+            height={110}
+            markers={markers}
+          />
+        </Panel>
+      )}
+
+      <ContainersPanel node={node} />
 
       {/* detail */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">

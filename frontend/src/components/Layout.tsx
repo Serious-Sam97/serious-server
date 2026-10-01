@@ -66,6 +66,7 @@ export function navFor(s: SessionInfo, node?: FleetNode): NavItem[] {
     { to: '/terminal', label: 'term', show: admin && nodeAllows(node, 'terminal') },
     { to: '/files', label: 'files', show: anyProject(s, 'files') && nodeAllows(node, 'files') },
     { to: '/fleet', label: 'fleet', show: true, global: true },
+    { to: '/events', label: 'events', show: true, global: true },
     { to: '/users', label: 'users', show: admin, global: true },
     { to: '/audit', label: 'audit', show: admin && nodeAllows(node, 'system') },
   ]

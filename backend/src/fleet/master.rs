@@ -84,6 +84,9 @@ struct NodeLive {
     events: VecDeque<serde_json::Value>,
     connected_at: Option<i64>,
     last_seen: Option<i64>,
+    /// Latest per-container minute, and when it was taken.
+    containers: Vec<super::containers::ContainerStat>,
+    containers_ts: Option<i64>,
 }
 
 pub struct Fleet {
@@ -132,7 +135,7 @@ impl Fleet {
         }
     }
 
-    fn event(&self, node: &str, kind: &str, detail: serde_json::Value) {
+    pub fn event(&self, node: &str, kind: &str, detail: serde_json::Value) {
         let ts = now_secs();
         {
             let mut nodes = self.nodes.lock().unwrap();
@@ -220,6 +223,7 @@ impl Fleet {
 
     fn push_metrics(&self, node: &str, points: Vec<HistoryPoint>, summary: Option<Summary>) {
         let mut fresh = Vec::new();
+        let extra;
         {
             let mut nodes = self.nodes.lock().unwrap();
             let live = nodes.entry(node.to_string()).or_default();
@@ -238,6 +242,8 @@ impl Fleet {
             if summary.is_some() {
                 live.summary = summary;
             }
+            // Replayed points carry no summary: the latest known one is close enough.
+            extra = live.summary.clone();
             live.last_seen = Some(now_secs());
         }
         let stored = self.ch_last_ts.lock().unwrap().get(node).copied().unwrap_or(0.0);
@@ -245,8 +251,45 @@ impl Fleet {
             self.record(Row::Metric {
                 node: node.to_string(),
                 point,
+                extra: extra.clone(),
             });
         }
+    }
+
+    pub fn push_containers(&self, node: &str, ts: i64, items: Vec<super::containers::ContainerStat>) {
+        {
+            let mut nodes = self.nodes.lock().unwrap();
+            let live = nodes.entry(node.to_string()).or_default();
+            live.containers = items.clone();
+            live.containers_ts = Some(ts);
+        }
+        for stat in items {
+            self.record(Row::Container { node: node.to_string(), ts, stat });
+        }
+    }
+
+    /// Latest per-container minute for a node.
+    pub fn latest_containers(&self, node: &str) -> (Option<i64>, Vec<super::containers::ContainerStat>) {
+        self.nodes
+            .lock()
+            .unwrap()
+            .get(node)
+            .map(|n| (n.containers_ts, n.containers.clone()))
+            .unwrap_or((None, Vec::new()))
+    }
+
+    pub fn clickhouse(&self) -> Option<Clickhouse> {
+        self.clickhouse.clone()
+    }
+
+    /// In-memory recent events (when there is no ClickHouse).
+    pub fn recent_events(&self, node: &str) -> Vec<serde_json::Value> {
+        self.nodes
+            .lock()
+            .unwrap()
+            .get(node)
+            .map(|n| n.events.iter().rev().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Send one control message to a connected node.
@@ -419,10 +462,12 @@ pub async fn spawn(state: AppState) -> anyhow::Result<()> {
             let mut rx = sampler.rx.clone();
             while rx.changed().await.is_ok() {
                 let point = sampler.history.lock().unwrap().back().copied();
+                let extra = Summary::from_payload(&sampler.rx.borrow());
                 if let Some(point) = point {
                     fleet_home.record(Row::Metric {
                         node: "home".into(),
                         point,
+                        extra,
                     });
                 }
             }
@@ -430,6 +475,23 @@ pub async fn spawn(state: AppState) -> anyhow::Result<()> {
     }
 
     super::alerts::spawn(state.clone());
+
+    // The home server's own containers, once a minute.
+    {
+        let fleet = fleet.clone();
+        let docker = state.docker.clone();
+        tokio::spawn(async move {
+            let mut collector = super::containers::Collector::default();
+            let mut tick = tokio::time::interval(super::containers::EVERY);
+            loop {
+                tick.tick().await;
+                let items = collector.sample(&docker).await;
+                if !items.is_empty() {
+                    fleet.push_containers("home", now_secs(), items);
+                }
+            }
+        });
+    }
     let listener = tokio::net::TcpListener::bind(state.config.fleet_bind).await?;
     tracing::info!("fleet listener on {}", state.config.fleet_bind);
     let app = Router::new()
@@ -671,6 +733,11 @@ async fn run_node(state: AppState, auth: Auth, socket: WebSocket, ip: String) {
         match msg {
             AgentMsg::Metrics { points, summary } => fleet.push_metrics(&node, points, summary),
             AgentMsg::Event { kind, detail } => fleet.event(&node, &kind, detail),
+            AgentMsg::ContainerStats { ts, items } => {
+                // Bounded: a node can't flood the store through this message.
+                let items = items.into_iter().take(500).collect();
+                fleet.push_containers(&node, ts.min(now_secs()), items);
+            }
             AgentMsg::HttpResponse { id, status, headers, body } => {
                 let body = B64.decode(body).unwrap_or_default();
                 fleet.resolve(&node, conn_id, id, HttpReply { status, headers, body });
@@ -730,6 +797,10 @@ pub fn api_routes() -> Router<AppState> {
         .route("/fleet/nodes", get(list_nodes))
         .route("/fleet/nodes/{node}/history", get(node_history))
         .route("/fleet/alerts", get(super::alerts::list))
+        .route("/fleet/events", get(super::history::events))
+        .route("/fleet/compare", get(super::history::compare))
+        .route("/fleet/nodes/{node}/summary", get(super::history::summary))
+        .route("/fleet/nodes/{node}/containers", get(super::history::containers))
         .route("/nodes/{node}/ws/{*rest}", get(proxy_ws))
         .route("/nodes/{node}/{*rest}", any(proxy_http))
 }

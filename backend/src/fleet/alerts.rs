@@ -72,10 +72,12 @@ async fn reconcile(state: &AppState, current: Vec<Alert>) {
     };
     for a in fired {
         tracing::warn!(node = a.node, "ALERT {}: {} — {}", a.severity, a.title, a.detail);
+        fleet.event(&a.node, "alert", json!({ "state": "firing", "severity": a.severity, "title": a.title, "detail": a.detail }));
         notify(state, &a, true).await;
     }
     for a in resolved {
         tracing::info!(node = a.node, "resolved: {}", a.title);
+        fleet.event(&a.node, "alert", json!({ "state": "resolved", "severity": a.severity, "title": a.title, "detail": a.detail }));
         notify(state, &a, false).await;
     }
 }

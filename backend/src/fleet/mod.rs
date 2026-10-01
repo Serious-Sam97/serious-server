@@ -8,6 +8,8 @@
 pub mod agent;
 pub mod alerts;
 pub mod clickhouse;
+pub mod containers;
+pub mod history;
 pub mod master;
 pub mod net;
 
@@ -45,6 +47,10 @@ pub struct Summary {
     pub cores: u64,
     pub uptime: u64,
     pub cpu_temp: Option<f64>,
+    #[serde(default)]
+    pub swap_total: u64,
+    #[serde(default)]
+    pub swap_used: u64,
 }
 
 impl Summary {
@@ -61,6 +67,8 @@ impl Summary {
             cores: v["cpu"]["per_core"].as_array().map(|c| c.len() as u64).unwrap_or(0),
             uptime: v["uptime"].as_u64().unwrap_or(0),
             cpu_temp: v["cpu"]["temp"].as_f64(),
+            swap_total: v["mem"]["swap_total"].as_u64().unwrap_or(0),
+            swap_used: v["mem"]["swap_used"].as_u64().unwrap_or(0),
         })
     }
 }
@@ -84,6 +92,11 @@ pub enum AgentMsg {
     Event {
         kind: String,
         detail: serde_json::Value,
+    },
+    /// Per-container usage, averaged over the last minute.
+    ContainerStats {
+        ts: i64,
+        items: Vec<containers::ContainerStat>,
     },
     HttpResponse {
         id: u64,

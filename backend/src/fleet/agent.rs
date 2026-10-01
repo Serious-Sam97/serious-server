@@ -283,6 +283,10 @@ async fn pump(
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
     let mut last_rx = Instant::now();
+    // Per-container usage once a minute (part of the `system` capability).
+    let mut containers = super::containers::Collector::default();
+    let mut container_tick = tokio::time::interval(super::containers::EVERY);
+    let containers_on = state.config.agent_allow.iter().any(|c| c == "system");
 
     loop {
         tokio::select! {
@@ -357,6 +361,12 @@ async fn pump(
             }
             Some(event) = next_event(&mut events) => {
                 tx.send(text(&event)).await?;
+            }
+            _ = container_tick.tick(), if containers_on => {
+                let items = containers.sample(&state.docker).await;
+                if !items.is_empty() {
+                    tx.send(text(&AgentMsg::ContainerStats { ts: super::now_secs(), items })).await?;
+                }
             }
             _ = ping.tick() => {
                 if last_rx.elapsed() > SILENCE_LIMIT {

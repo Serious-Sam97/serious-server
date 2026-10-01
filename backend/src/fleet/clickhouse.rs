@@ -20,8 +20,10 @@ const MAX_BUFFERED: usize = 50_000;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub enum Row {
-    Metric { node: String, point: HistoryPoint },
+    /// One sample; `extra` adds memory total, disk usage and swap when known.
+    Metric { node: String, point: HistoryPoint, extra: Option<super::Summary> },
     Event { node: String, ts: i64, kind: String, detail: String },
+    Container { node: String, ts: i64, stat: super::containers::ContainerStat },
 }
 
 #[derive(Clone)]
@@ -116,13 +118,57 @@ impl Clickhouse {
                 ) ENGINE = AggregatingMergeTree ORDER BY (node, t)
                 TTL t + INTERVAL 2 YEAR"
             ),
+            // Columns added after the first release.
             format!(
-                "CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.node_metrics_1m_mv
+                "ALTER TABLE {db}.node_metrics
+                   ADD COLUMN IF NOT EXISTS mem_total UInt64 DEFAULT 0 CODEC(T64, ZSTD),
+                   ADD COLUMN IF NOT EXISTS disk_used UInt64 DEFAULT 0 CODEC(T64, ZSTD),
+                   ADD COLUMN IF NOT EXISTS disk_total UInt64 DEFAULT 0 CODEC(T64, ZSTD),
+                   ADD COLUMN IF NOT EXISTS swap_used UInt64 DEFAULT 0 CODEC(T64, ZSTD),
+                   ADD COLUMN IF NOT EXISTS swap_total UInt64 DEFAULT 0 CODEC(T64, ZSTD)"
+            ),
+            format!(
+                "ALTER TABLE {db}.node_metrics_1m
+                   ADD COLUMN IF NOT EXISTS mem_max SimpleAggregateFunction(max, UInt64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS mem_total_max SimpleAggregateFunction(max, UInt64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS disk_used_max SimpleAggregateFunction(max, UInt64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS disk_total_max SimpleAggregateFunction(max, UInt64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS swap_used_max SimpleAggregateFunction(max, UInt64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS swap_total_max SimpleAggregateFunction(max, UInt64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS rx_max SimpleAggregateFunction(max, Float32) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS tx_max SimpleAggregateFunction(max, Float32) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS disk_r_sum SimpleAggregateFunction(sum, Float64) DEFAULT 0,
+                   ADD COLUMN IF NOT EXISTS disk_w_sum SimpleAggregateFunction(sum, Float64) DEFAULT 0"
+            ),
+            // The rollup view with the new columns replaces the first one.
+            format!(
+                "CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.node_metrics_1m_mv2
                  TO {db}.node_metrics_1m AS
                  SELECT node, toStartOfMinute(ts) AS t, count() AS n,
                         sum(cpu) AS cpu_sum, max(cpu) AS cpu_max, sum(mem_used) AS mem_sum,
-                        sum(rx) AS rx_sum, sum(tx) AS tx_sum, sum(load1) AS load_sum
+                        sum(rx) AS rx_sum, sum(tx) AS tx_sum, sum(load1) AS load_sum,
+                        max(mem_used) AS mem_max, max(mem_total) AS mem_total_max,
+                        max(disk_used) AS disk_used_max, max(disk_total) AS disk_total_max,
+                        max(swap_used) AS swap_used_max, max(swap_total) AS swap_total_max,
+                        max(rx) AS rx_max, max(tx) AS tx_max,
+                        sum(disk_r) AS disk_r_sum, sum(disk_w) AS disk_w_sum
                  FROM {db}.node_metrics GROUP BY node, t"
+            ),
+            format!("DROP VIEW IF EXISTS {db}.node_metrics_1m_mv"),
+            format!(
+                "CREATE TABLE IF NOT EXISTS {db}.container_metrics (
+                    node LowCardinality(String),
+                    ts DateTime CODEC(DoubleDelta, ZSTD),
+                    project LowCardinality(String),
+                    service LowCardinality(String),
+                    container LowCardinality(String),
+                    cpu Float32 CODEC(Gorilla, ZSTD),
+                    mem UInt64 CODEC(T64, ZSTD),
+                    mem_limit UInt64 CODEC(T64, ZSTD),
+                    rx Float32 CODEC(Gorilla, ZSTD),
+                    tx Float32 CODEC(Gorilla, ZSTD)
+                ) ENGINE = MergeTree ORDER BY (node, container, ts)
+                TTL ts + INTERVAL 90 DAY"
             ),
             format!(
                 "CREATE TABLE IF NOT EXISTS {db}.fleet_events (
@@ -159,28 +205,145 @@ impl Clickhouse {
             .collect())
     }
 
-    /// Downsampled history for one node: ~120 points over `hours`.
-    /// Returns rows `[unix_secs, cpu_avg, cpu_max, mem_avg, rx_avg, tx_avg, load_avg]`.
-    pub async fn history(&self, node: &str, hours: u32) -> anyhow::Result<serde_json::Value> {
-        let db = &self.cfg.database;
-        let step = ((hours as u64 * 3600) / 120).max(60).to_string();
-        let hours = hours.to_string();
+    async fn rows(&self, sql: &str, params: &[(&str, &str)]) -> anyhow::Result<Vec<serde_json::Value>> {
         let body = self
             .query(
-                &format!(
-                    "SELECT toUnixTimestamp(toStartOfInterval(t, toIntervalSecond({{step:UInt32}}))) AS x,
-                            sum(cpu_sum) / sum(n), max(cpu_max), sum(mem_sum) / sum(n),
-                            sum(rx_sum) / sum(n), sum(tx_sum) / sum(n), sum(load_sum) / sum(n)
-                     FROM {db}.node_metrics_1m
-                     WHERE node = {{node:String}} AND t >= now() - toIntervalHour({{hours:UInt32}})
-                     GROUP BY x ORDER BY x FORMAT JSONCompact"
-                ),
-                &[("node", node), ("step", &step), ("hours", &hours)],
+                &format!("{sql} SETTINGS output_format_json_quote_64bit_integers = 0 FORMAT JSONCompact"),
+                params,
                 b"",
             )
             .await?;
         let v: serde_json::Value = serde_json::from_str(&body)?;
-        Ok(v["data"].clone())
+        Ok(v["data"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Bucket size giving ~240 points over `hours` (never under a minute).
+    pub fn step(hours: u32) -> u64 {
+        ((hours as u64 * 3600) / 240).max(60)
+    }
+
+    /// Downsampled history for one node over `hours`. Each row:
+    /// `[x, cpu_avg, cpu_max, mem_avg, mem_max, rx_avg, tx_avg, load_avg,
+    ///   disk_r_avg, disk_w_avg, disk_used, disk_total, swap_used, swap_total,
+    ///   mem_total, rx_max, tx_max]`.
+    pub async fn history(&self, node: &str, hours: u32) -> anyhow::Result<serde_json::Value> {
+        let db = &self.cfg.database;
+        let step = Self::step(hours).to_string();
+        let hours = hours.to_string();
+        let rows = self
+            .rows(
+                &format!(
+                    "SELECT toUnixTimestamp(toStartOfInterval(t, toIntervalSecond({{step:UInt32}}))) AS x,
+                            sum(cpu_sum) / sum(n), max(cpu_max), sum(mem_sum) / sum(n), toFloat64(max(mem_max)),
+                            sum(rx_sum) / sum(n), sum(tx_sum) / sum(n), sum(load_sum) / sum(n),
+                            sum(disk_r_sum) / sum(n), sum(disk_w_sum) / sum(n),
+                            toFloat64(max(disk_used_max)), toFloat64(max(disk_total_max)),
+                            toFloat64(max(swap_used_max)), toFloat64(max(swap_total_max)),
+                            toFloat64(max(mem_total_max)), max(rx_max), max(tx_max)
+                     FROM {db}.node_metrics_1m
+                     WHERE node = {{node:String}} AND t >= now() - toIntervalHour({{hours:UInt32}})
+                     GROUP BY x ORDER BY x"
+                ),
+                &[("node", node), ("step", &step), ("hours", &hours)],
+            )
+            .await?;
+        Ok(serde_json::Value::Array(rows))
+    }
+
+    /// One metric for several nodes, bucketed: rows `[node, x, value]`.
+    /// `metric`: `cpu` (avg %) or `mem` (avg % of total).
+    pub async fn compare(&self, nodes: &[String], hours: u32, metric: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = &self.cfg.database;
+        let value = match metric {
+            "mem" => "sum(mem_sum) / sum(n) / nullIf(max(mem_total_max), 0) * 100",
+            _ => "sum(cpu_sum) / sum(n)",
+        };
+        let step = Self::step(hours).to_string();
+        let hours = hours.to_string();
+        let list = array_param(nodes);
+        self.rows(
+            &format!(
+                "SELECT node, toUnixTimestamp(toStartOfInterval(t, toIntervalSecond({{step:UInt32}}))) AS x, {value}
+                 FROM {db}.node_metrics_1m
+                 WHERE has({{nodes:Array(String)}}, node) AND t >= now() - toIntervalHour({{hours:UInt32}})
+                 GROUP BY node, x ORDER BY x"
+            ),
+            &[("nodes", &list), ("step", &step), ("hours", &hours)],
+        )
+        .await
+    }
+
+    /// Events, newest first: rows `[node, unix_secs, kind, detail_json]`.
+    pub async fn events(&self, nodes: &[String], hours: u32, kind: Option<&str>) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = &self.cfg.database;
+        let hours = hours.to_string();
+        let list = array_param(nodes);
+        let kind = kind.unwrap_or("");
+        self.rows(
+            &format!(
+                "SELECT node, toUnixTimestamp(ts), kind, detail FROM {db}.fleet_events
+                 WHERE has({{nodes:Array(String)}}, node) AND ts >= now() - toIntervalHour({{hours:UInt32}})
+                   AND ({{kind:String}} = '' OR kind = {{kind:String}})
+                 ORDER BY ts DESC LIMIT 2000"
+            ),
+            &[("nodes", &list), ("hours", &hours), ("kind", kind)],
+        )
+        .await
+    }
+
+    /// Minutes with at least one sample, and the first such minute, over `days`.
+    pub async fn coverage(&self, node: &str, days: u32) -> anyhow::Result<(u64, i64)> {
+        let db = &self.cfg.database;
+        let days = days.to_string();
+        let rows = self
+            .rows(
+                &format!(
+                    "SELECT uniqExact(t), toUnixTimestamp(min(t)) FROM {db}.node_metrics_1m
+                     WHERE node = {{node:String}} AND t >= now() - toIntervalDay({{days:UInt32}})"
+                ),
+                &[("node", node), ("days", &days)],
+            )
+            .await?;
+        let r = rows.first().cloned().unwrap_or_default();
+        Ok((r[0].as_u64().unwrap_or(0), r[1].as_i64().unwrap_or(0)))
+    }
+
+    /// Container lifecycle counts over `days`: rows `[container, restarts, dies, ooms]`.
+    pub async fn container_events(&self, node: &str, days: u32) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = &self.cfg.database;
+        let days = days.to_string();
+        self.rows(
+            &format!(
+                "SELECT JSONExtractString(detail, 'name') AS c,
+                        countIf(JSONExtractString(detail, 'action') = 'restart'),
+                        countIf(JSONExtractString(detail, 'action') = 'die'),
+                        countIf(JSONExtractString(detail, 'action') = 'oom')
+                 FROM {db}.fleet_events
+                 WHERE node = {{node:String}} AND kind = 'docker' AND ts >= now() - toIntervalDay({{days:UInt32}})
+                 GROUP BY c HAVING c != '' ORDER BY 3 DESC, 2 DESC"
+            ),
+            &[("node", node), ("days", &days)],
+        )
+        .await
+    }
+
+    /// Per-container series over `hours`: rows `[project, service, container, x, cpu_avg, mem_max]`.
+    pub async fn containers(&self, node: &str, hours: u32) -> anyhow::Result<Vec<serde_json::Value>> {
+        let db = &self.cfg.database;
+        let step = ((hours as u64 * 3600) / 60).max(60).to_string();
+        let hours = hours.to_string();
+        self.rows(
+            &format!(
+                "SELECT project, service, container,
+                        toUnixTimestamp(toStartOfInterval(ts, toIntervalSecond({{step:UInt32}}))) AS x,
+                        avg(cpu), toFloat64(max(mem))
+                 FROM {db}.container_metrics
+                 WHERE node = {{node:String}} AND ts >= now() - toIntervalHour({{hours:UInt32}})
+                 GROUP BY project, service, container, x ORDER BY container, x"
+            ),
+            &[("node", node), ("step", &step), ("hours", &hours)],
+        )
+        .await
     }
 }
 
@@ -252,17 +415,32 @@ async fn flush(ch: &Clickhouse, rows: &[Row]) -> anyhow::Result<()> {
     let db = &ch.cfg.database;
     let mut metrics = String::new();
     let mut events = String::new();
+    let mut containers = String::new();
     for row in rows {
         match row {
-            Row::Metric { node, point: p } => {
+            Row::Metric { node, point: p, extra } => {
+                let x = extra.clone().unwrap_or_default();
                 metrics.push_str(
                     &serde_json::json!({
                         "node": node, "ts": p[0] as u64, "cpu": p[1], "mem_used": p[2] as u64,
                         "rx": p[3], "tx": p[4], "disk_r": p[5], "disk_w": p[6], "load1": p[7],
+                        "mem_total": x.mem_total, "disk_used": x.disk_used, "disk_total": x.disk_total,
+                        "swap_used": x.swap_used, "swap_total": x.swap_total,
                     })
                     .to_string(),
                 );
                 metrics.push('\n');
+            }
+            Row::Container { node, ts, stat } => {
+                containers.push_str(
+                    &serde_json::json!({
+                        "node": node, "ts": ts, "project": stat.project, "service": stat.service,
+                        "container": stat.container, "cpu": stat.cpu, "mem": stat.mem,
+                        "mem_limit": stat.mem_limit, "rx": stat.rx, "tx": stat.tx,
+                    })
+                    .to_string(),
+                );
+                containers.push('\n');
             }
             Row::Event { node, ts, kind, detail } => {
                 events.push_str(
@@ -281,7 +459,20 @@ async fn flush(ch: &Clickhouse, rows: &[Row]) -> anyhow::Result<()> {
         ch.query(&format!("INSERT INTO {db}.fleet_events FORMAT JSONEachRow"), &[], events.as_bytes())
             .await?;
     }
+    if !containers.is_empty() {
+        ch.query(&format!("INSERT INTO {db}.container_metrics FORMAT JSONEachRow"), &[], containers.as_bytes())
+            .await?;
+    }
     Ok(())
+}
+
+/// `['a','b']` for an `Array(String)` query parameter.
+fn array_param(items: &[String]) -> String {
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|i| format!("'{}'", i.replace('\\', "\\\\").replace('\'', "\\'")))
+        .collect();
+    format!("[{}]", quoted.join(","))
 }
 
 fn urlencode(s: &str) -> String {

@@ -14,6 +14,7 @@ import TerminalPage from './pages/TerminalPage'
 import Files from './pages/Files'
 import Audit from './pages/Audit'
 import Fleet from './pages/Fleet'
+import Events from './pages/Events'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -47,6 +48,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Home /> },
       { path: 'fleet', element: <Fleet /> },
+      { path: 'events', element: <Events /> },
       { path: 'users', element: <Users /> },
       ...nodePages,
       { path: 'n/:node', children: nodePages },
